@@ -53,7 +53,8 @@ class MinimaxPlayer(Player):
             for the opponent.
         """
         score = 0
-        board = np.array(state.observation_tensor(self.player_id)).reshape(3, 6, 7)[0]
+        board = np.array(state.observation_tensor(self.player_id))
+        board = board.reshape(3, 6, 7)[0]
         # Check horizontal windows
         for row in range(6):
             for col in range(4):

@@ -1,7 +1,11 @@
-import matplotlib as plt
+import os
+from typing import Optional
+import matplotlib.pyplot as plt
+from mcts_wrapper import MCTSWrapper
+from players.dqn import DQNPlayer
 from players.minimax import MinimaxPlayer
 from players.player import Player
-from utils import get_connect_four_game, get_initial_state, play_game, visualize_board
+from utils import get_connect_four_game, get_initial_state, visualize_board
 import warnings
 
 
@@ -12,9 +16,6 @@ def play(player1: Player, player2: Player, visualize=False) -> int:
     -1 if `agent1` loses
     0 if draw
     """
-    game = get_connect_four_game()
-    input_shape = (3, 6, 7)  # [通道, 行, 列]
-    action_size = 7  # Connect4有7列可以下子
     state = get_initial_state()
 
     while not state.is_terminal():
@@ -26,15 +27,8 @@ def play(player1: Player, player2: Player, visualize=False) -> int:
         current_player = state.current_player()
         current_player = player1 if current_player == 0 else player2
 
-        #     # 使用MCTS搜索
-        #     best_action, _, action_counts, _ = current_mcts.search(state)
-        #     action = best_action
-        # else:
-        #     # 仅使用DQN策略
-        #     state_repr = current_mcts.get_state_representation(state, current_player)
-        #     action = current_agent.select_action(state_repr)
         action = current_player.get_action(state)
-        # print(f"智能体 {current_player+1} 选择列 {action}")
+        print(f"智能体 {current_player} 选择列 {action}")
         state.apply_action(action)
 
     if visualize:
@@ -76,6 +70,63 @@ def get_winrate_against_minimax(player: Player, depth=2, num_games=50) -> float:
     return games_won / total_games
 
 
-def plot_winrate(winrates):
+def evaluate_all_checkpoints(checkpoint_folder, mcts_simulations=1000):
+    # List all files that match a checkpoint extension (e.g. '.ckpt').
+    # You may adjust the file pattern if your checkpoint files have a different extension.
+    checkpoints = [
+        f
+        for f in os.listdir(checkpoint_folder)
+        if f.endswith(".ckpt") or f.endswith(".pt")
+    ]
 
-    pass
+    checkpoints.sort()
+    win_rates = []
+
+    for ckpt in checkpoints:
+        ckpt_path = os.path.join(checkpoint_folder, ckpt)
+
+        game = get_connect_four_game()
+        dqn = DQNPlayer(ckpt_path, mcts=mcts)
+        mcts = MCTSWrapper(
+            game=game,
+            num_simulations=mcts_simulations,
+            uct_c=2.0,
+            max_nodes=10000,
+            dirichlet_alpha=0.0,
+            dirichlet_noise=False,
+            solve=True,
+        )
+
+        win_rate = get_winrate_against_minimax(dqn)
+        win_rates.append(win_rate)
+        print(f"Evaluated {ckpt}: win rate = {win_rate:.2f}")
+
+    return checkpoints, win_rates
+
+
+def plot_win_rates(
+    win_rates: Optional[float] = None, checkpoint_folder: Optional[str] = None
+):
+    if not win_rates and not checkpoint_folder:
+        raise Exception(
+            "Either winrates or checkpoint folder for evaluation shold be provided"
+        )
+
+    if not win_rates:
+        win_rates = evaluate_all_checkpoints(
+            checkpoint_folder,
+        )
+        # winrates.save
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(len(win_rates)), win_rates, marker="o", linestyle="-", color="blue")
+    plt.xlabel("(Checkpoint) Index")
+    plt.ylabel("Win Rate")
+    plt.title("Win Rate Evaluation Across Checkpoints")
+
+    # Optionally, set checkpoint names as x-tick labels.
+    # If there are many checkpoints, you might want to rotate the labels.
+    # plt.xticks(range(len(win_rates)), checkpoint_names, rotation=45, ha="right")
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
