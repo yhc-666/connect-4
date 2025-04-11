@@ -89,7 +89,7 @@ class MCTSWrapper:
         Args:
             state: OpenSpiel游戏状态
             player_id: 玩家ID
-            
+        
         Returns:
             状态表示为张量，形状为 [通道, 行, 列]
         """

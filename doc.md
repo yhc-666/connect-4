@@ -203,3 +203,23 @@ compare alpha zero vs DQN + MCTS
 
 
 
+
+
+
+
+## Optimal strategy
+
+**Game Solved**: On a standard 7×6 board, the first player can force a win with optimal moves.
+
+**Central Priority**: Start in the middle columns (ideally the central column) to maximize potential four-in-a-row opportunities.
+
+**Double Threats**: Aim to create situations where you threaten to complete four in a row in two different places, making it impossible for the opponent to defend both with one move.
+
+**Forced Moves**: React promptly to opponent threats while methodically building your own; sacrifice immediate gains if it means setting up a winning fork in the next turn.
+
+**Consistent Pressure**: Maintain control by continuously generating new threats, especially around the center columns, ensuring the opponent is always on the defensive.
+
+
+
+
+

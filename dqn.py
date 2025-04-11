@@ -17,30 +17,16 @@ class DQN(nn.Module):
         super(DQN, self).__init__()
         
         # Connect4游戏状态的特征提取器
-        self.conv1 = nn.Conv2d(input_shape[0], 128, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(128)
-        self.conv2 = nn.Conv2d(128, 128, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(128)
-        self.conv3 = nn.Conv2d(128, 256, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(256)
-        self.conv4 = nn.Conv2d(256, 256, kernel_size=3, padding=1)
-        self.bn4 = nn.BatchNorm2d(256)
+        self.conv1 = nn.Conv2d(input_shape[0], 64, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
         
         # 计算卷积层输出尺寸
-        conv_output_size = 256 * input_shape[1] * input_shape[2]
-        
-        # 注意力层
-        self.attention_conv = nn.Conv2d(256, 1, kernel_size=1)
+        conv_output_size = 128 * input_shape[1] * input_shape[2]
         
         # Q值预测头
-        self.fc1 = nn.Linear(conv_output_size, 512)
-        self.drop1 = nn.Dropout(0.3)
-        self.fc2 = nn.Linear(512, 256)
-        self.drop2 = nn.Dropout(0.3)
-        self.fc3 = nn.Linear(256, action_size)
-        
-        # 价值预测头（辅助任务）
-        self.value_fc = nn.Linear(512, 1)
+        self.fc1 = nn.Linear(conv_output_size, 256)
+        self.fc2 = nn.Linear(256, action_size)
         
     def forward(self, x):
         """前向传播
@@ -51,34 +37,12 @@ class DQN(nn.Module):
         Returns:
             每个动作的Q值预测
         """
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
-        features = F.relu(self.bn4(self.conv4(x)))
-        
-        # 应用注意力机制
-        attention_weights = F.softmax(self.attention_conv(features).view(features.size(0), -1), dim=1)
-        attention_weights = attention_weights.view(attention_weights.size(0), 1, features.size(2), features.size(3))
-        attention_applied = features * attention_weights
-        
-        # 计算输出尺寸 (不再拼接特征，以避免维度问题)
-        x = features + attention_applied  # 使用加法而不是拼接
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
         x = x.view(x.size(0), -1)  # 展平
-        
         x = F.relu(self.fc1(x))
-        x = self.drop1(x)
-        
-        # 保存这个特征表示用于价值预测
-        features_fc = x
-        
-        x = F.relu(self.fc2(x))
-        x = self.drop2(x)
-        action_values = self.fc3(x)
-        
-        # 价值预测（可选，仅在训练期间使用）
-        state_value = self.value_fc(features_fc)
-        
-        return action_values
+        return self.fc2(x)
 
 
 class DQNAgent:
@@ -110,38 +74,25 @@ class DQNAgent:
         # 优化器
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
         
-    def select_action(self, state, epsilon=0.0, legal_actions=None):
+    def select_action(self, state, epsilon=0.0):
         """选择动作（根据ε-贪婪策略）
         
         Args:
             state: 当前状态
             epsilon: 探索概率
-            legal_actions: 可选的合法动作列表，如果提供，将只从这些动作中选择
             
         Returns:
             选择的动作
         """
         if np.random.random() < epsilon:
             # 随机探索
-            if legal_actions is not None:
-                return np.random.choice(legal_actions)
-            else:
-                return np.random.randint(self.action_size)
+            return np.random.randint(self.action_size)
         else:
             # 贪婪选择
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
                 q_values = self.policy_net(state_tensor)
-                
-                if legal_actions is not None:
-                    # 仅考虑合法动作
-                    temp_q_values = q_values.cpu().numpy()[0]
-                    masked_q_values = np.full(temp_q_values.shape, float('-inf'))
-                    for action in legal_actions:
-                        masked_q_values[action] = temp_q_values[action]
-                    return np.argmax(masked_q_values)
-                else:
-                    return q_values.argmax().item()
+                return q_values.argmax().item()
     
     def get_q_values(self, states):
         """获取一批状态的Q值

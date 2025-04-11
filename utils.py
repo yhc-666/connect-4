@@ -55,15 +55,6 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
         current_player = state.current_player()
         agent = agents[current_player]
         
-        # 获取合法动作
-        legal_actions = state.legal_actions()
-        
-        # 如果没有合法动作，跳过
-        if not legal_actions:
-            if verbose:
-                print(f"玩家 {current_player} 没有合法动作，跳过")
-            break
-        
         # 获取状态表示
         state_repr = get_state_representation(state, current_player)
         
@@ -74,7 +65,8 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
             
             # 用于探索的概率
             if np.random.random() < epsilon:
-                # 随机选择一个合法动作
+                # 随机选择一个动作
+                legal_actions = state.legal_actions()
                 action = np.random.choice(legal_actions)
             else:
                 # 使用MCTS选择的最佳动作
@@ -84,7 +76,7 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
             mcts_q_value = action_q_values.get(action, 0.0)
         else:
             # 如果不使用MCTS，直接使用DQN进行动作选择
-            action = agent.select_action(state_repr, epsilon, legal_actions)
+            action = agent.select_action(state_repr, epsilon)
             mcts_q_value = 0.0  # 没有MCTS评估
         
         # 应用选择的动作

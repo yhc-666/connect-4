@@ -175,25 +175,24 @@ def train(config):
         
         plt.tight_layout()
         plt.savefig(os.path.join(checkpoint_dir, 'training_metrics.png'))
-        plt.show()
     
     return agent
 
 if __name__ == "__main__":
     # 训练配置
     config = {
-        "num_episodes": 20000,          # 训练回合数(从5000增加到20000)
-        "mcts_simulations": 500,        # 每步MCTS模拟次数(从50增加到500)
+        "num_episodes": 20000,           # 训练回合数
+        "mcts_simulations": 50,         # 每步MCTS模拟次数
         "batch_size": 64,               # 训练批次大小
-        "replay_buffer_size": 50000,    # 回放缓冲区容量(从20000增加到50000)
+        "replay_buffer_size": 20000,    # 回放缓冲区容量
         "dqn_learning_rate": 0.0001,    # DQN学习率
         "gamma": 0.99,                  # 奖励折扣因子
         "target_update_freq": 100,      # 目标网络更新频率
         "epsilon_start": 1.0,           # 初始探索率
-        "epsilon_end": 0.1,             # 最终探索率(从0.05增加到0.1)
-        "epsilon_decay": 0.0001,        # 探索率衰减系数(从0.0002减小到0.0001)
+        "epsilon_end": 0.05,            # 最终探索率
+        "epsilon_decay": 0.0002,        # 探索率衰减系数
         "training_freq": 4,             # 每回合训练次数
-        "lambda_mix": 0.7,              # MCTS和DQN目标的混合系数(从0.5增加到0.7)
+        "lambda_mix": 0.5,              # MCTS和DQN目标的混合系数
         "eval_freq": 200,               # 评估频率
         "eval_episodes": 20,            # 评估回合数
         "checkpoint_freq": 500,         # 检查点保存频率

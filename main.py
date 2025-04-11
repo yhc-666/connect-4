@@ -51,8 +51,6 @@ def play_against_ai(model_path, mcts_simulations=0, visualize=True):
         # 显示当前棋盘
         print("\n当前棋盘状态:")
         print(state)
-        # if visualize:
-        #     visualize_board(state)
         
         current_player = state.current_player()
         
@@ -229,18 +227,18 @@ def main():
         
         # 训练配置
         config = {
-            "num_episodes": 20000,          # 训练回合数
-            "mcts_simulations": 500,        # 每步MCTS模拟次数
+            "num_episodes": 5000,           # 训练回合数
+            "mcts_simulations": 50,         # 每步MCTS模拟次数
             "batch_size": 64,               # 训练批次大小
-            "replay_buffer_size": 50000,    # 回放缓冲区容量
+            "replay_buffer_size": 20000,    # 回放缓冲区容量
             "dqn_learning_rate": 0.0001,    # DQN学习率
             "gamma": 0.99,                  # 奖励折扣因子
             "target_update_freq": 100,      # 目标网络更新频率
             "epsilon_start": 1.0,           # 初始探索率
-            "epsilon_end": 0.1,             # 最终探索率
-            "epsilon_decay": 0.0001,        # 探索率衰减系数
+            "epsilon_end": 0.05,            # 最终探索率
+            "epsilon_decay": 0.0002,        # 探索率衰减系数
             "training_freq": 4,             # 每回合训练次数
-            "lambda_mix": 0.7,              # MCTS和DQN目标的混合系数
+            "lambda_mix": 0.5,              # MCTS和DQN目标的混合系数
             "eval_freq": 200,               # 评估频率
             "eval_episodes": 20,            # 评估回合数
             "checkpoint_freq": 500,         # 检查点保存频率
