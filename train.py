@@ -4,28 +4,30 @@ import numpy as np
 import torch
 import matplotlib.pyplot as plt
 from copy import deepcopy
+from tqdm import tqdm
 
 from replay_buffer import ReplayBuffer
-from dqn import DQNAgent
-from mcts_wrapper import MCTSWrapper
+from dqn import DQNAgent, MCTSDQNAgent, MiniMaxAgent
 from utils import (
     get_connect_four_game, 
     play_game, 
-    evaluate_agent, 
+    evaluate_agent_elo,
     visualize_board, 
     ensure_dir,
     calculate_moving_average
 )
 
 def train(config):
-    """训练DQN+MCTS智能体
+    """Train an agent
     
     Args:
-        config: 训练配置字典
+        config: Training configuration dictionary
+        
+    Returns:
+        Trained agent
     """
-    # 配置参数
+    # Configuration parameters
     num_episodes = config["num_episodes"]
-    mcts_simulations = config["mcts_simulations"]
     batch_size = config["batch_size"]
     replay_buffer_size = config["replay_buffer_size"]
     dqn_learning_rate = config["dqn_learning_rate"]
@@ -37,65 +39,108 @@ def train(config):
     training_freq = config["training_freq"]
     lambda_mix = config["lambda_mix"]
     eval_freq = config["eval_freq"]
-    eval_episodes = config["eval_episodes"]
+    eval_minimax_depth = config.get("eval_minimax_depth", 7)
     checkpoint_freq = config["checkpoint_freq"]
     checkpoint_dir = config["checkpoint_dir"]
     device = config["device"]
     
-    # 确保检查点目录存在
+    # Agent type and related parameters
+    agent_type = config.get("agent_type", "dqn")
+    mcts_simulations = config.get("mcts_simulations", 50)
+    use_dqn_for_mcts = config.get("use_dqn_for_mcts", False)
+    
+    # Ensure checkpoint directory exists
     ensure_dir(checkpoint_dir)
     
-    # 创建游戏环境
+    # Create game environment
     game = get_connect_four_game()
     
-    # 创建MCTS搜索器
-    mcts_wrapper = MCTSWrapper(
-        game=game,
-        num_simulations=mcts_simulations,
-        uct_c=config["uct_c"],
-        max_nodes=config["max_nodes"],
-        dirichlet_alpha=config["dirichlet_alpha"],
-        dirichlet_noise=config["dirichlet_noise"],
-        solve=config["solve"],
-    )
+    # Create agent
+    input_shape = (3, 6, 7)  # Connect4 observation space shape
+    action_size = 7  # Connect4 has 7 columns to place tokens
     
-    # 创建DQN智能体
-    input_shape = (3, 6, 7)  # Connect4的观察空间形状
-    action_size = 7  # Connect4有7列可以下子
+    if agent_type == "dqn":
+        # Create standard DQN agent
+        agent = DQNAgent(
+            input_shape=input_shape,
+            action_size=action_size,
+            device=device,
+            learning_rate=dqn_learning_rate,
+            gamma=gamma
+        )
+    elif agent_type == "mcts_dqn":
+        # Create MCTS-DQN hybrid agent
+        agent = MCTSDQNAgent(
+            input_shape=input_shape,
+            action_size=action_size,
+            device=device,
+            learning_rate=dqn_learning_rate,
+            gamma=gamma,
+            num_simulations=mcts_simulations,
+            uct_c=config.get("uct_c", 2.0),
+            max_nodes=config.get("max_nodes", 10000),
+            solve=config.get("solve", True),
+            use_dqn_evaluator=use_dqn_for_mcts,
+            n_rollouts=1
+        )
+    elif agent_type == "minimax":
+        # Create MiniMax agent
+        agent = MiniMaxAgent(
+            input_shape=input_shape,
+            action_size=action_size,
+            device=device,
+            max_depth=config.get("minimax_depth", 4)
+        )
+    else:
+        raise ValueError(f"Unsupported agent type: {agent_type}")
     
-    agent = DQNAgent(
-        input_shape=input_shape,
-        action_size=action_size,
-        device=device,
-        learning_rate=dqn_learning_rate,
-        gamma=gamma
-    )
+    # If MiniMax agent, no training needed
+    if agent_type == "minimax":
+        # Save and return the agent
+        final_model_path = os.path.join(checkpoint_dir, "minimax_model.pth")
+        print(f"MiniMax agent created with depth {agent.max_depth}.")
+        return agent
     
-    # 创建回放缓冲区
+    # Create replay buffer for other agent types
     replay_buffer = ReplayBuffer(capacity=replay_buffer_size)
     
-    # 记录训练指标
+    # Record training metrics
     rewards = []
     losses = []
-    win_rates = []
     epsilon_values = []
     
-    # 为评估创建一个固定策略的副本
-    prev_agent = None
+    # Initialize Elo ratings and history
+    initial_elo = 1200
+    current_elos = {
+        'agent_p1_elo': initial_elo, 'agent_p2_elo': initial_elo,
+        'minimax_p1_elo': initial_elo, 'minimax_p2_elo': initial_elo
+    }
+    elo_history = {
+        'episodes': [],
+        'agent_p1_elo': [], 'agent_p2_elo': [],
+        'minimax_p1_elo': [], 'minimax_p2_elo': []
+    }
     
-    # 训练主循环
+    # Create the fixed Minimax opponent for evaluation
+    eval_opponent = MiniMaxAgent(
+        input_shape=input_shape,
+        action_size=action_size,
+        device='cpu',
+        max_depth=eval_minimax_depth
+    )
+    print(f"Evaluation opponent: MiniMaxAgent with depth {eval_minimax_depth}")
+    
+    # Training main loop
     start_time = time.time()
-    for episode in range(1, num_episodes + 1):
-        # 计算当前的epsilon值（探索率）
-        epsilon = max(epsilon_end, epsilon_start - episode * epsilon_decay)
+    for episode in tqdm(range(1, num_episodes + 1), desc="Training Progress", unit="episodes"):
+        # Calculate current epsilon value (exploration rate)
+        epsilon = max(epsilon_end, epsilon_start - (epsilon_start - epsilon_end) * (episode / num_episodes))
         epsilon_values.append(epsilon)
         
-        # 自我对弈并收集经验
+        # Self-play and collect experiences
         returns, final_state = play_game(
             agent1=agent,
             agent2=agent,
-            mcts_wrapper=mcts_wrapper,
-            mcts_simulations=mcts_simulations,
             epsilon=epsilon,
             verbose=False,
             collect_experience=True,
@@ -103,109 +148,185 @@ def train(config):
             lambda_mix=lambda_mix
         )
         
-        rewards.append(returns[0])  # 记录玩家1的奖励
+        rewards.append(returns[0])  # Record player 1's reward
         
-        # 训练DQN智能体
+        # Train the agent
         if len(replay_buffer) >= batch_size:
             for _ in range(training_freq):
-                # 从回放缓冲区中采样
+                # Sample from replay buffer
                 states, actions, rewards_batch, next_states, q_mcts_values, dones = replay_buffer.sample(batch_size)
                 
-                # 更新DQN
+                # Update DQN
                 loss = agent.learn(states, actions, rewards_batch, next_states, q_mcts_values, dones, lambda_mix)
                 losses.append(loss)
         
-        # 定期更新目标网络
+        # Periodically update target network
         if episode % target_update_freq == 0:
-            agent.update_target_network()
+            if hasattr(agent, 'update_target_network'):
+                agent.update_target_network()
         
-        # 评估智能体性能
-        if episode % eval_freq == 0:
-            if prev_agent is None:
-                # 首次评估，与自己对弈
-                win_rate = 0.5  # 理论上与自己对弈应为50%胜率
+        # Periodically evaluate agent performance using Elo
+        if episode % eval_freq == 0 or episode == num_episodes:
+            print(f"\n--- Evaluating Episode {episode}/{num_episodes} ---")
+            # Evaluate current agent's Elo against fixed Minimax opponent
+            updated_elos = evaluate_agent_elo(
+                agent=agent,
+                opponent_agent=eval_opponent,
+                current_elos=current_elos,
+                k_factor=config.get("elo_k_factor", 32)
+            )
+            current_elos = updated_elos
+            
+            # Store Elo history
+            elo_history['episodes'].append(episode)
+            elo_history['agent_p1_elo'].append(current_elos['agent_p1_elo'])
+            elo_history['agent_p2_elo'].append(current_elos['agent_p2_elo'])
+            elo_history['minimax_p1_elo'].append(current_elos['minimax_p1_elo'])
+            elo_history['minimax_p2_elo'].append(current_elos['minimax_p2_elo'])
+            
+            # Print evaluation results
+            steps_since_last_eval = training_freq * eval_freq
+            avg_loss = np.mean(losses[-steps_since_last_eval:]) if losses else 0
+            print(f"Episode {episode}/{num_episodes} | Epsilon: {epsilon:.4f} | Avg Loss: {avg_loss:.6f}")
+            print(f"  Elo Scores: Agent(P1): {current_elos['agent_p1_elo']:.1f}, Agent(P2): {current_elos['agent_p2_elo']:.1f}")
+            print(f"              Minimax(P1): {current_elos['minimax_p1_elo']:.1f}, Minimax(P2): {current_elos['minimax_p2_elo']:.1f}")
+            print("-----------------------------------------")
+        
+        # Save checkpoints
+        if episode % checkpoint_freq == 0 or episode == num_episodes:
+            checkpoint_path = os.path.join(checkpoint_dir, f"model_episode_{episode}.pth")
+            if hasattr(agent, 'save'):
+                agent.save(checkpoint_path)
+    
+    # Save final model
+    final_model_path = os.path.join(checkpoint_dir, f"final_{agent_type}_model.pth")
+    if hasattr(agent, 'save'):
+        agent.save(final_model_path)
+        print(f"Training completed, final model saved at: {final_model_path}")
+    else:
+        print(f"Training completed for agent type {agent_type} (no save method applicable).")
+    
+    # Calculate training time
+    total_time = time.time() - start_time
+    print(f"Total training time: {total_time:.2f} seconds")
+    
+    # Plot training curves
+    if losses or elo_history['episodes']:
+        num_plots = (1 if elo_history['episodes'] else 0) * 2 + (1 if losses else 0) + (1 if epsilon_values else 0)
+        if num_plots == 0:
+            print("No data to plot.")
+            return agent
+        
+        plt.figure(figsize=(12, 4 * num_plots))
+        plot_index = 1
+        
+        # Plot loss curve
+        if losses:
+            plt.subplot(num_plots, 1, plot_index)
+            loss_ma_window = max(100, len(losses) // 50)
+            loss_ma = calculate_moving_average(losses, window=loss_ma_window)
+            if len(loss_ma) > 0:
+                loss_steps = np.linspace(0, len(losses), len(loss_ma))
+                plt.plot(loss_steps, loss_ma)
+                plt.title(f'Training Loss (Moving Average, window={loss_ma_window})')
+                plt.xlabel('Training Steps')
+                plt.ylabel('Loss')
             else:
-                # 与之前的智能体对弈
-                win_rate = evaluate_agent(agent, prev_agent, num_games=eval_episodes, mcts_simulations=0)
-            
-            win_rates.append(win_rate)
-            
-            # 打印训练进度
-            elapsed_time = time.time() - start_time
-            avg_loss = np.mean(losses[-training_freq*batch_size:]) if losses else 0
-            print(f"回合 {episode}/{num_episodes} | 时间: {elapsed_time:.1f}s | 探索率: {epsilon:.4f} | 胜率: {win_rate:.4f} | 损失: {avg_loss:.6f}")
-            
-            # 创建一个新的评估基准
-            if episode % (eval_freq * 5) == 0:
-                prev_agent = deepcopy(agent)
+                plt.plot(losses)
+                plt.title('Training Loss (Raw)')
+                plt.xlabel('Training Steps')
+                plt.ylabel('Loss')
+            plot_index += 1
         
-        # 保存检查点
-        if episode % checkpoint_freq == 0:
-            checkpoint_path = os.path.join(checkpoint_dir, f"dqn_mcts_episode_{episode}.pt")
-            agent.save(checkpoint_path)
-    
-    # 训练结束，保存最终模型
-    final_model_path = os.path.join(checkpoint_dir, "dqn_mcts_final.pt")
-    agent.save(final_model_path)
-    
-    # 绘制训练指标
-    if losses:
-        plt.figure(figsize=(15, 10))
+        # Plot epsilon curve
+        if epsilon_values:
+            plt.subplot(num_plots, 1, plot_index)
+            plt.plot(range(1, num_episodes + 1), epsilon_values)
+            plt.title('Exploration Rate (Epsilon)')
+            plt.xlabel('Episodes')
+            plt.ylabel('Epsilon')
+            plot_index += 1
         
-        # 绘制损失曲线
-        plt.subplot(3, 1, 1)
-        plt.plot(calculate_moving_average(losses, window=100))
-        plt.title('Training Loss (Moving Average)')
-        plt.xlabel('Training Steps')
-        plt.ylabel('Loss')
+        # Plot Elo P1 curve
+        if elo_history['episodes']:
+            plt.subplot(num_plots, 1, plot_index)
+            plt.plot(elo_history['episodes'], elo_history['agent_p1_elo'], label=f'Agent Elo (P1)', marker='.')
+            plt.plot(elo_history['episodes'], elo_history['minimax_p1_elo'], label=f'Minimax Depth {eval_minimax_depth} Elo (P1)', linestyle='--', marker='.')
+            plt.title('Elo Rating (Player 1 vs Minimax)')
+            plt.xlabel('Episodes')
+            plt.ylabel('Elo')
+            plt.legend()
+            plt.grid(True)
+            plot_index += 1
         
-        # 绘制探索率曲线
-        plt.subplot(3, 1, 2)
-        plt.plot(epsilon_values)
-        plt.title('Exploration Rate (Epsilon)')
-        plt.xlabel('Episodes')
-        plt.ylabel('Epsilon')
+        # Plot Elo P2 curve
+        if elo_history['episodes']:
+            plt.subplot(num_plots, 1, plot_index)
+            plt.plot(elo_history['episodes'], elo_history['agent_p2_elo'], label=f'Agent Elo (P2)', marker='.')
+            plt.plot(elo_history['episodes'], elo_history['minimax_p2_elo'], label=f'Minimax Depth {eval_minimax_depth} Elo (P2)', linestyle='--', marker='.')
+            plt.title('Elo Rating (Player 2 vs Minimax)')
+            plt.xlabel('Episodes')
+            plt.ylabel('Elo')
+            plt.legend()
+            plt.grid(True)
         
-        # 绘制胜率曲线
-        plt.subplot(3, 1, 3)
-        plt.plot(np.arange(eval_freq, num_episodes + 1, eval_freq), win_rates)
-        plt.title('Win Rate')
-        plt.xlabel('Episodes')
-        plt.ylabel('Win Rate')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(checkpoint_dir, 'training_metrics.png'))
+        plt.tight_layout(pad=2.0)
+        plot_filename = f'training_metrics_{agent_type}_elo.png'
+        plot_filepath = os.path.join(checkpoint_dir, plot_filename)
+        plt.savefig(plot_filepath)
+        print(f"Training plots saved to {plot_filepath}")
     
     return agent
 
 if __name__ == "__main__":
-    # 训练配置
+    # Training configuration
     config = {
-        "num_episodes": 20000,           # 训练回合数
-        "mcts_simulations": 50,         # 每步MCTS模拟次数
-        "batch_size": 64,               # 训练批次大小
-        "replay_buffer_size": 20000,    # 回放缓冲区容量
-        "dqn_learning_rate": 0.0001,    # DQN学习率
-        "gamma": 0.99,                  # 奖励折扣因子
-        "target_update_freq": 100,      # 目标网络更新频率
-        "epsilon_start": 1.0,           # 初始探索率
-        "epsilon_end": 0.05,            # 最终探索率
-        "epsilon_decay": 0.0002,        # 探索率衰减系数
-        "training_freq": 4,             # 每回合训练次数
-        "lambda_mix": 0.5,              # MCTS和DQN目标的混合系数
-        "eval_freq": 200,               # 评估频率
-        "eval_episodes": 20,            # 评估回合数
-        "checkpoint_freq": 500,         # 检查点保存频率
-        "checkpoint_dir": "checkpoints",# 检查点目录
-        "device": "cuda" if torch.cuda.is_available() else "cpu",  # 计算设备
+        "num_episodes": 5000,           # Number of training episodes
+        "batch_size": 64,               # Training batch size
+        "replay_buffer_size": 20000,    # Replay buffer capacity
+        "dqn_learning_rate": 0.0001,    # DQN learning rate
+        "gamma": 0.99,                  # Reward discount factor
+        "target_update_freq": 100,      # Target network update frequency
+        "epsilon_start": 1.0,           # Initial exploration rate
+        "epsilon_end": 0.05,            # Final exploration rate
+        "epsilon_decay": (1.0 - 0.05) / 5000, # Linear decay factor (recalculated for clarity, value depends on num_episodes)
+        "training_freq": 4,             # Training steps per episode's experience
+        "lambda_mix": 0.5,              # Mixing coefficient for MCTS and DQN targets (if applicable)
+        "eval_freq": 200,               # Evaluation frequency (in episodes)
+        "eval_minimax_depth": 7,        # Depth of Minimax opponent for evaluation
+        "elo_k_factor": 32,             # Elo K-factor for rating updates
+        "checkpoint_freq": 500,         # Checkpoint saving frequency
+        "checkpoint_dir": "checkpoints",# Checkpoint directory
+        "device": "cuda" if torch.cuda.is_available() else "cpu",  # Computing device
         
-        # MCTS参数
-        "uct_c": 2.0,                   # UCT探索常数
-        "max_nodes": 10000,             # MCTS搜索树最大节点数
-        "dirichlet_alpha": 0.3,         # Dirichlet噪声参数
-        "dirichlet_noise": True,        # 是否添加Dirichlet噪声
-        "solve": True,                  # 是否在MCTS中解决终局状态
+        # MCTS parameters
+        "mcts_simulations": 50,         # MCTS simulations per step during self-play/action selection
+        "uct_c": 2.0,                   # UCT exploration constant
+        "max_nodes": 10000,             # Maximum nodes in MCTS search tree
+        "dirichlet_alpha": 0.3,         # Dirichlet noise parameter (consider adding to MCTS agent if used)
+        "dirichlet_noise": False,       # Whether to add Dirichlet noise (consider adding to MCTS agent if used)
+        "solve": True,                  # Whether to solve terminal states in MCTS
+        "use_dqn_for_mcts": False,      # Whether to use DQN to evaluate MCTS leaf nodes
+        
+        # Agent type
+        "agent_type": "dqn",            # Options: "dqn", "mcts_dqn" (Minimax is not trained here)
+        
+        # MiniMax parameters
+        "minimax_depth": 4,             # MiniMax search depth if creating a minimax agent directly
     }
     
-    # 开始训练
-    agent = train(config) 
+    # Start training
+    trained_agent = train(config)
+
+    # Example of how to potentially use the trained agent after training
+    if trained_agent and config['agent_type'] != 'minimax':
+        print("\nTraining finished. Example: Playing one game against Minimax depth 4.")
+        from utils import play_interactive_game, play_game # Ensure play_game is also imported if used here
+        # play_interactive_game(trained_agent) # Play against human
+        # Create an opponent for post-training test
+        eval_opponent_final = MiniMaxAgent(input_shape=(3, 6, 7), action_size=7, device='cpu', max_depth=4)
+        final_returns, _ = play_game(trained_agent, eval_opponent_final, verbose=True, collect_experience=False) # Use the modified play_game
+        print(f"Final game vs Minimax Depth 4: Agent score = {final_returns[0]}, Minimax score = {final_returns[1]}")
+        # You might want to play another game with players swapped
+        final_returns_swapped, _ = play_game(eval_opponent_final, trained_agent, verbose=True, collect_experience=False)
+        print(f"Final game (swapped) vs Minimax Depth 4: Minimax score = {final_returns_swapped[0]}, Agent score = {final_returns_swapped[1]}")

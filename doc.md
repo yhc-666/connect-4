@@ -45,6 +45,12 @@
 
 
 
+是的，DQN相比Policy-based方法更适合与MCTS结合。
+原因在于：
+
+- **DQN提供明确的价值估计（Q值）**，天然匹配MCTS中对节点状态价值的评估需求，而Policy-based方法主要输出策略概率，价值估计相对模糊。
+- MCTS的核心优势在于通过搜索精确地修正动作价值，而DQN本身的价值导向特性与这种修正方式更直接兼容。
+
 ## Value based (DQN)+MCTS
 
 
@@ -98,12 +104,28 @@ compare alpha zero vs DQN + MCTS
    - 从空棋盘开始，轮到当前玩家执行动作时：
      1. **MCTS**：以当前状态为根节点，展开 MCTS 搜索 $$N_{\text{sim}}$$ 次。  
         - 在 MCTS 叶节点利用 **DQN** 估计该叶子状态的价值（或进行有限步随机 Rollout）。  
+        
+          > **Early Training (Rollout)**
+          >
+          > - Use **short, cheap rollouts** at MCTS leaf nodes.
+          > - This “bootstraps” the training, because your DQN is initially untrained or very inaccurate. Rollouts help provide somewhat more stable (though often noisy) value estimates.
+          > - As you gather more self-play data, the network parameters θ\thetaθ start to converge to better Q-values.
+          >
+          > **Later Training (Q-value)**
+          >
+          > - Gradually **reduce or disable rollouts** in favor of the **DQN’s Q-value** estimate.
+          > - Once the DQN is reasonably accurate, relying on its value predictions is typically more **computationally efficient** (no extra simulation steps per leaf), and it ensures that the agent is leveraging its learned knowledge.
+        
         - 回溯更新得到根节点各动作的访问次数与价值。  
+        
      2. 在根节点上，**基于访问次数或价值** 选择最终动作 $$a$$。  
+     
      3. 环境执行动作 $$a$$，获得下一个状态 $$s'$$ 及即时奖励 $$r$$（如胜利 +1、失败 -1、平局 0 等）。  
+     
      4. **存储数据**：将 $$\bigl(s, a, r, s'\bigr)$$ 及根节点的 $$Q_{\text{MCTS}}(s,a)$$存入 Replay Buffer $$\mathcal{D}$$。  
+     
    - 如果达到终局（棋盘满或有人获胜），结束该对局。
-
+   
 3. **网络训练 (DQN Update)**：
    - 在对局或数步后，定期从 Replay Buffer 中随机采样 (Batch) 若干条 $$\bigl(s, a, r, s'\bigr)$$。  
    - **计算训练目标**：  
@@ -218,6 +240,104 @@ compare alpha zero vs DQN + MCTS
 **Forced Moves**: React promptly to opponent threats while methodically building your own; sacrifice immediate gains if it means setting up a winning fork in the next turn.
 
 **Consistent Pressure**: Maintain control by continuously generating new threats, especially around the center columns, ensuring the opponent is always on the defensive.
+
+
+
+
+
+## Method
+
+
+
+
+
+
+
+## Experiment
+
+我决定在report的实验部分这样写包含以下：
+
+对局演示：against human player
+
+**1.Training Analysis**
+
+Let each agent (e.g., “DQN” and “MiniMax”) alternate between going first and second. You then collect all the results (wins/losses/draws) into a single sequence to compute a single Elo rating per agent.
+
+1.1Elo曲线图：
+
+**定期评估**
+
+- 每隔指定数量的 episodes（如 `evaluation_interval = 1000`），暂停训练，进行一次评估。
+- 评估时，让当前的 Agent 与 Minimax 先手后手各对战一局（如 `num_evaluation_games = 50`），记录对战结果（胜=1, 平=0.5, 负=0）。
+
+**Elo 计算**
+
+- 为 Agent 和 Minimax 都维护一个 Elo 分数（先手/后手分别），初始值一般设为 1200。
+- 每场评估对战完成后，使用 Elo 公式（见下文）更新双方 Elo。
+
+- X轴（横坐标）：
+
+  
+
+  - 智能体的训练episodes或训练局数。
+
+    
+
+- Y轴（纵坐标）：
+
+  
+
+  - 智能体和Minimax算法的实时Elo值。
+
+    
+
+- 图像含义：
+
+  
+
+  - Agent Elo高于Minimax Elo → 你的Agent实力已超过Minimax。
+
+    
+
+  - Elo曲线上升趋势 → 智能体性能持续提高。
+
+1.2Loss 曲线图
+
+证明训练有效且收敛
+
+2.**Comparison with Baselines**
+
+|                            | Playing as first | Playing as Second |       |      |       |       |
+| -------------------------- | ---------------- | ----------------- | ----- | ---- | ----- | ----- |
+| Agent                      | Win%             | Draw%             | Loss% | Win% | Draw% | Loss% |
+| DQN + MCTS (play w/ MCTS)  |                  |                   |       |      |       |       |
+| DQN + MCTS (play w/o MCTS) |                  |                   |       |      |       |       |
+| DQN                        |                  |                   |       |      |       |       |
+| Pure MCTS                  |                  |                   |       |      |       |       |
+
+Table: Evaluate agent against MiniMax agent, each pair repeat for 100 episodes
+
+**3.Abalation Studies**
+
+lambda = 0
+
+lambda = 0.5
+
+lambda = 1
+
+lambda权重调为0，0.5，1 看看只使用MCTS Q作为target，加权，只使用Target network Q的效果不同，证明我提出的Q融合有效
+
+Simulation = 10
+
+Simulation = 50
+
+Simulation = 150
+
+证明MCTS有帮助
+
+4.Heat Map,证明agent学到了optimal策略比如，先手选中间；对手要赢的时候堵人
+
+
 
 
 

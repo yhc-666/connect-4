@@ -4,6 +4,42 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+class BaseAgent:
+    """所有智能体的基类"""
+    
+    def __init__(self, input_shape, action_size, device='cpu'):
+        """基础智能体初始化
+        
+        Args:
+            input_shape: 输入状态的形状
+            action_size: 动作空间大小
+            device: 计算设备 ('cpu' 或 'cuda')
+        """
+        self.input_shape = input_shape
+        self.action_size = action_size
+        self.device = torch.device(device)
+    
+    def select_action(self, state, epsilon=0.0):
+        """选择动作
+        
+        Args:
+            state: 当前状态
+            epsilon: 探索概率
+            
+        Returns:
+            选择的动作
+        """
+        raise NotImplementedError("子类必须实现select_action方法")
+    
+    def save(self, path):
+        """保存模型参数"""
+        raise NotImplementedError("子类必须实现save方法")
+    
+    def load(self, path):
+        """加载模型参数"""
+        raise NotImplementedError("子类必须实现load方法")
+
+
 class DQN(nn.Module):
     """深度Q网络模型"""
     
@@ -45,7 +81,7 @@ class DQN(nn.Module):
         return self.fc2(x)
 
 
-class DQNAgent:
+class DQNAgent(BaseAgent):
     """DQN智能体"""
     
     def __init__(self, input_shape, action_size, device='cpu', learning_rate=0.001, gamma=0.99, tau=0.001):
@@ -59,9 +95,7 @@ class DQNAgent:
             gamma: 奖励折扣因子
             tau: 目标网络软更新系数
         """
-        self.input_shape = input_shape
-        self.action_size = action_size
-        self.device = torch.device(device)
+        super(DQNAgent, self).__init__(input_shape, action_size, device)
         self.gamma = gamma  # 折扣因子
         self.tau = tau  # 目标网络软更新系数
         
@@ -79,20 +113,38 @@ class DQNAgent:
         
         Args:
             state: 当前状态
-            epsilon: 探索概率
+            epsilon: 探索率
             
         Returns:
             选择的动作
         """
+        # 获取合法动作
+        legal_actions = state.legal_actions()
+        if not legal_actions:
+            return None
+            
         if np.random.random() < epsilon:
-            # 随机探索
-            return np.random.randint(self.action_size)
+            # 随机探索（只从合法动作中选择）
+            return np.random.choice(legal_actions)
         else:
             # 贪婪选择
             with torch.no_grad():
+                # 检查state是否为pyspiel.State类型
+                if hasattr(state, 'observation_tensor'):
+                    # 获取观察张量并转换为适当形状
+                    obs = np.array(state.observation_tensor(state.current_player()))
+                    state = obs.reshape(3, 6, 7)  # 形状: [棋子类型, 行, 列]
+                
                 state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
                 q_values = self.policy_net(state_tensor)
-                return q_values.argmax().item()
+                
+                # 创建一个掩码，将非法动作的Q值设为负无穷大
+                q_values_np = q_values.cpu().numpy()[0]
+                mask = np.ones(self.action_size) * float('-inf')
+                mask[legal_actions] = 0
+                masked_q_values = q_values_np + mask
+                
+                return np.argmax(masked_q_values)
     
     def get_q_values(self, states):
         """获取一批状态的Q值
@@ -176,4 +228,333 @@ class DQNAgent:
         checkpoint = torch.load(path)
         self.policy_net.load_state_dict(checkpoint['policy_net'])
         self.target_net.load_state_dict(checkpoint['target_net'])
-        self.optimizer.load_state_dict(checkpoint['optimizer']) 
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+
+
+class MCTSDQNAgent(BaseAgent):
+    """结合DQNAgent和MCTS的智能体"""
+    
+    def __init__(self, input_shape, action_size, device='cpu', learning_rate=0.001, 
+                 gamma=0.99, tau=0.001, num_simulations=100, uct_c=2.0, max_nodes=10000, 
+                 solve=True, use_dqn_evaluator=True, n_rollouts=1):
+        """初始化MCTS-DQN智能体
+        
+        Args:
+            input_shape: 输入状态的形状
+            action_size: 动作空间大小
+            device: 计算设备 ('cpu' 或 'cuda')
+            learning_rate: 学习率
+            gamma: 奖励折扣因子
+            tau: 目标网络软更新系数
+            num_simulations: MCTS搜索的模拟次数
+            uct_c: UCT探索常数
+            max_nodes: MCTS搜索树最大节点数
+            solve: 是否在MCTS中解决终局状态
+            use_dqn_evaluator: 是否使用DQN评估器，False则使用随机模拟评估器
+            n_rollouts: 随机模拟次数（仅在use_dqn_evaluator=False时使用）
+        """
+        super(MCTSDQNAgent, self).__init__(input_shape, action_size, device)
+        
+        # 创建内部DQNAgent
+        self.dqn_agent = DQNAgent(input_shape, action_size, device, learning_rate, gamma, tau)
+        
+        # MCTS参数
+        self.num_simulations = num_simulations
+        self.uct_c = uct_c
+        self.max_nodes = max_nodes
+        self.solve = solve
+        self.use_dqn_evaluator = use_dqn_evaluator
+        self.n_rollouts = n_rollouts
+        
+        # 当使用mcts_wrapper时，需要初始化游戏
+        from open_spiel.python.algorithms import mcts
+        import pyspiel
+        from utils import get_connect_four_game
+        
+        self.game = get_connect_four_game()
+        
+        # 创建MCTS包装器
+        from mcts_wrapper import MCTSWrapper, DQNEvaluator
+        
+        # 根据参数选择评估器
+        if use_dqn_evaluator:
+            self.evaluator = DQNEvaluator(self.dqn_agent)
+        else:
+            self.evaluator = mcts.RandomRolloutEvaluator(n_rollouts=n_rollouts)
+        
+        self.mcts_wrapper = MCTSWrapper(
+            game=self.game,
+            num_simulations=num_simulations,
+            uct_c=uct_c,
+            max_nodes=max_nodes,
+            solve=solve,
+            use_dqn=use_dqn_evaluator,
+            dqn_agent=self.dqn_agent
+        )
+        
+        # 手动设置评估器
+        self.mcts_wrapper.evaluator = self.evaluator
+    
+    def select_action(self, state, epsilon=0.0):
+        """选择动作，使用MCTS搜索
+        
+        Args:
+            state: 当前状态
+            epsilon: 探索率（在此实现中不使用，但保留参数以保持接口一致性）
+            
+        Returns:
+            选择的动作
+        """
+        # 获取合法动作
+        legal_actions = state.legal_actions()
+        if not legal_actions:
+            return None
+            
+        # 如果只有一个合法动作，直接返回
+        if len(legal_actions) == 1:
+            return legal_actions[0]
+            
+        if self.num_simulations > 0:
+            # 使用MCTS搜索
+            best_action, _, _, _ = self.mcts_wrapper.search(state)
+            
+            # 确保选择的动作是合法的
+            if best_action not in legal_actions:
+                return np.random.choice(legal_actions)
+                
+            return best_action
+        else:
+            # 直接使用DQN策略，需要传递原始状态
+            return self.dqn_agent.select_action(state, epsilon)
+    
+    def get_q_values(self, states):
+        """获取一批状态的Q值
+        
+        Args:
+            states: 状态批次
+            
+        Returns:
+            预测的Q值
+        """
+        return self.dqn_agent.get_q_values(states)
+    
+    def learn(self, states, actions, rewards, next_states, q_mcts_values, dones, lambda_mix=0.5):
+        """从经验中学习
+        
+        Args:
+            states: 状态批次
+            actions: 动作批次
+            rewards: 奖励批次
+            next_states: 下一状态批次
+            q_mcts_values: MCTS估值批次
+            dones: 终止标志批次
+            lambda_mix: MCTS和DQN目标的混合系数
+            
+        Returns:
+            当前批次的损失值
+        """
+        return self.dqn_agent.learn(states, actions, rewards, next_states, q_mcts_values, dones, lambda_mix)
+    
+    def update_target_network(self):
+        """硬更新目标网络"""
+        self.dqn_agent.update_target_network()
+    
+    def soft_update_target_network(self):
+        """软更新目标网络"""
+        self.dqn_agent.soft_update_target_network()
+    
+    def save(self, path):
+        """保存模型参数"""
+        self.dqn_agent.save(path)
+    
+    def load(self, path):
+        """加载模型参数"""
+        self.dqn_agent.load(path)
+    
+    def set_num_simulations(self, num_simulations):
+        """设置MCTS模拟次数
+        
+        Args:
+            num_simulations: 新的模拟次数
+        """
+        self.num_simulations = num_simulations
+        self.mcts_wrapper.max_simulations = num_simulations
+        self.mcts_wrapper.num_simulations = num_simulations
+    
+    def set_evaluator(self, use_dqn_evaluator=True, n_rollouts=1):
+        """设置MCTS评估器类型
+        
+        Args:
+            use_dqn_evaluator: 是否使用DQN评估器
+            n_rollouts: 随机模拟次数（仅在use_dqn_evaluator=False时使用）
+        """
+        from open_spiel.python.algorithms import mcts
+        from mcts_wrapper import DQNEvaluator
+        
+        self.use_dqn_evaluator = use_dqn_evaluator
+        self.n_rollouts = n_rollouts
+        
+        if use_dqn_evaluator:
+            self.evaluator = DQNEvaluator(self.dqn_agent)
+        else:
+            self.evaluator = mcts.RandomRolloutEvaluator(n_rollouts=n_rollouts)
+        
+        # 更新MCTS包装器的评估器
+        self.mcts_wrapper.evaluator = self.evaluator
+        self.mcts_wrapper.use_dqn = use_dqn_evaluator
+
+
+class MiniMaxAgent(BaseAgent):
+    """基于OpenSpiel的MiniMax算法的智能体"""
+    
+    def __init__(self, input_shape, action_size, max_depth,device='cpu'):
+        """初始化MiniMax智能体
+        
+        Args:
+            input_shape: 输入状态的形状
+            action_size: 动作空间大小
+            device: 计算设备 ('cpu' 或 'cuda')
+            max_depth: 最大搜索深度
+        """
+        super(MiniMaxAgent, self).__init__(input_shape, action_size, device)
+        self.max_depth = max_depth
+        
+        # 获取游戏实例
+        from utils import get_connect_four_game
+        self.game = get_connect_four_game()
+        
+        # 导入OpenSpiel的AlphaBetaSearch算法
+        from open_spiel.python.algorithms import minimax 
+        self.alpha_beta_search = minimax.alpha_beta_search
+        
+        # 设置玩家ID
+        self.player_id = 0
+        self.opponent_id = 1
+    
+    def select_action(self, state, epsilon=0.0):
+        """选择动作，使用OpenSpiel的AlphaBetaSearch算法
+        
+        Args:
+            state: 当前状态
+            epsilon: 探索率（在此实现中不使用，但保留参数以保持接口一致性）
+            
+        Returns:
+            选择的动作
+        """
+        # 获取合法动作
+        legal_actions = state.legal_actions()
+        
+        # 如果没有合法动作，返回None
+        if not legal_actions:
+            return None
+        
+        # 如果只有一个合法动作，直接返回
+        if len(legal_actions) == 1:
+            return legal_actions[0]
+        
+        # 设置当前玩家ID
+        self.player_id = state.current_player()
+        self.opponent_id = 1 if self.player_id == 0 else 0
+        
+        # 使用OpenSpiel的AlphaBetaSearch算法
+        value, best_action = self.alpha_beta_search(
+            game=self.game,
+            state=state,
+            value_function=self._evaluate_board if self.max_depth > 0 else None,
+            maximum_depth=self.max_depth
+        )
+        
+        return best_action
+    
+    def _evaluate_board(self, state):
+        # Observation tensor: shape 2 x 6 x 7 (大部分情况)
+        obs = np.array(state.observation_tensor(self.player_id))
+        board_channels = obs.reshape(3, 6, 7)
+
+        # channel[0] = 当前玩家的落子，0/1
+        # channel[1] = 对手的落子，0/1
+        my_pieces = board_channels[0]
+        opp_pieces = board_channels[1]
+
+        # 合并成单一的 6x7 棋盘
+        #   0 = empty
+        #   1 = 我(player_id)的落子
+        #   2 = 对手的落子
+        board = np.zeros((6, 7), dtype=int)
+        board[my_pieces == 1] = 1
+        board[opp_pieces == 1] = 2
+
+        # 现在再去做四连检测
+        score = 0
+
+        # 遍历所有可能的 4-length 窗口
+        # (Horizontal)
+        for row in range(6):
+            for col in range(4):
+                window = board[row, col:col+4]
+                score += self._evaluate_window(window)
+
+        # (Vertical)
+        for row in range(3):
+            for col in range(7):
+                window = board[row:row+4, col]
+                score += self._evaluate_window(window)
+
+        # (Positive diagonal)
+        for row in range(3):
+            for col in range(4):
+                window = [board[row+i, col+i] for i in range(4)]
+                score += self._evaluate_window(window)
+
+        # (Negative diagonal)
+        for row in range(3, 6):
+            for col in range(4):
+                window = [board[row-i, col+i] for i in range(4)]
+                score += self._evaluate_window(window)
+
+        # 中心列加分
+        center_col = board[:, 3]
+        score += np.count_nonzero(center_col == 1) * 3
+
+        return score
+
+
+    def _evaluate_window(self, window):
+        """给定4格窗口的打分."""
+        player_count = np.count_nonzero(window == 1)
+        opp_count = np.count_nonzero(window == 2)
+        empty_count = np.count_nonzero(window == 0)
+
+        # 如果我方和对手都在这4格里，都不算潜在连子 => 直接 0 分
+        if player_count > 0 and opp_count > 0:
+            return 0
+
+        # 我方的各种情况
+        if player_count == 4:
+            return 1_000_000   # 直接稳赢
+        elif player_count == 3 and empty_count == 1:
+            return 50
+        elif player_count == 2 and empty_count == 2:
+            return 10
+
+        # 对手的各种情况（数值上给负分或者更小的值）
+        if opp_count == 4:
+            return -1_000_000  # 对手马上赢了
+        elif opp_count == 3 and empty_count == 1:
+            return -100
+        elif opp_count == 2 and empty_count == 2:
+            return -20
+
+        return 0
+
+        
+    def save(self, path):
+        """保存智能体参数（MiniMax没有需要保存的模型）"""
+        # 保存配置参数
+        np.save(path, {'max_depth': self.max_depth})
+    
+    def load(self, path):
+        """加载智能体参数"""
+        # 加载配置参数
+        config = np.load(path, allow_pickle=True).item()
+        self.max_depth = config['max_depth']

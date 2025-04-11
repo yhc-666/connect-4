@@ -1,28 +1,40 @@
-# Connect4 DQN+MCTS 自我对弈强化学习
+# Connect4 多智能体强化学习框架
 
-这个项目实现了一个基于深度Q网络(DQN)和蒙特卡洛树搜索(MCTS)的Connect4(四子棋)智能体，通过自我对弈的方式学习游戏策略。
+这个项目实现了多种Connect4(四子棋)智能体，包括深度Q网络(DQN)、蒙特卡洛树搜索(MCTS)与DQN结合的混合智能体，以及MiniMax搜索智能体。所有智能体通过统一的接口进行训练和评估。
 
-## 项目组件
+## 智能体类型
 
-该项目包含以下主要组件：
+该项目实现了以下智能体类型：
 
-1. **DQN模型** - 用于学习状态-动作价值函数
-2. **MCTS搜索** - 提供前瞻搜索能力
+1. **DQNAgent** - 基于深度Q网络的智能体
+2. **MCTSDQNAgent** - 结合DQN和MCTS的混合智能体，可选择使用DQN或随机模拟对叶节点进行评估
+3. **MiniMaxAgent** - 基于MiniMax算法的智能体，使用Alpha-Beta剪枝优化搜索过程
+
+## 项目架构
+
+项目采用了面向对象的设计模式，主要组件包括：
+
+1. **BaseAgent** - 所有智能体的基类，定义了通用接口
+2. **智能体实现** - 继承自BaseAgent的具体智能体实现
 3. **经验回放缓冲区** - 存储和采样游戏经验
-4. **自我对弈训练循环** - 协调训练过程
+4. **统一的训练和评估接口** - 使得不同智能体的比较更加公平
 
 ## 算法特点
 
-本项目的核心是将MCTS与DQN相结合，利用两者的优势：
+### DQN
+- 使用深度卷积网络学习状态-动作价值函数
+- 使用经验回放和目标网络提高训练稳定性
+- 支持ε-贪婪探索策略
 
-- **MCTS** 提供高质量的搜索结果，可以看到几步之后的游戏局面
-- **DQN** 提供一般化的价值函数，能够从经验中学习
-- **混合学习目标** 将MCTS的搜索值与DQN的时序差分(TD)目标相结合，提高学习效率
+### MCTS-DQN
+- 结合MCTS的前瞻搜索能力和DQN的泛化能力
+- 可以选择使用DQN评估器或随机模拟评估器
+- 混合学习目标提高学习效率
 
-学习目标公式：
-```
-y = (1 - λ)(r + γ * max(Q(s',a'))) + λ * Q_MCTS(s,a)
-```
+### MiniMax
+- 使用经典的MiniMax搜索算法
+- Alpha-Beta剪枝减少无效搜索
+- 启发式评估函数用于非终端状态评估
 
 ## 安装
 
@@ -36,77 +48,96 @@ y = (1 - λ)(r + γ * max(Q(s',a'))) + λ * Q_MCTS(s,a)
 可以通过以下命令安装依赖：
 
 ```bash
-pip install torch numpy matplotlib
-pip install open_spiel
+pip install -r requirements.txt
 ```
 
 ## 使用方法
 
-### 训练模型
-
-要启动训练过程，请运行：
+### 训练不同类型的智能体
 
 ```bash
-python main.py --mode train
+# 训练DQN智能体
+python main.py --mode train --agent_type dqn
+
+# 训练MCTS-DQN混合智能体
+python main.py --mode train --agent_type mcts_dqn --mcts_sims 50 --use_dqn_for_mcts
+
+# 创建MiniMax智能体（无需训练）
+python main.py --mode train --agent_type minimax
 ```
 
-训练参数可以在`main.py`中的配置字典中修改。
+### 智能体对战
 
-### AI与AI对弈
 ```bash
-python main.py --mode agent_vs_agent --model_path checkpoints/dqn_mcts_final.pt --model_path2 checkpoints/dqn_mcts_final.pt --mcts_sims 50 --mcts_sims2 50 --visualize
+# DQN与DQN对战
+python main.py --mode agent_vs_agent --model_path checkpoints/final_dqn_model.pth --model_path2 checkpoints/final_dqn_model.pth --visualize
+
+# DQN与MCTS-DQN对战
+python main.py --mode agent_vs_agent --model_path checkpoints/final_dqn_model.pth --model_path2 checkpoints/final_mcts_dqn_model.pth --mcts_sims2 100 --use_dqn_for_mcts2 --visualize
+
+# 任意两个智能体对战
+python main.py --mode agent_vs_agent --model_path <model1_path> --model_path2 <model2_path> --mcts_sims <sims1> --mcts_sims2 <sims2> --visualize
 ```
 
 ### 与AI对弈
 
-训练完成后，可以通过以下命令与训练好的AI对弈：
-
 ```bash
-python main.py --mode play --model_path checkpoints/dqn_mcts_final.pt --visualize
-```
+# 与DQN对弈
+python main.py --mode play --model_path checkpoints/final_dqn_model.pth --visualize
 
-参数说明：
-- `--model_path`: 训练好的模型路径
-- `--mcts_sims`: 对弈时MCTS的模拟次数（默认50），0表示仅使用DQN
-- `--visualize`: 是否显示棋盘可视化
+# 与MCTS-DQN对弈
+python main.py --mode play --model_path checkpoints/final_mcts_dqn_model.pth --mcts_sims 100 --use_dqn_for_mcts --visualize
+
+# 与MiniMax对弈
+python main.py --mode play --model_path checkpoints/minimax_model.pth --visualize
+```
 
 ## 文件结构
 
-- `dqn.py` - DQN网络模型和智能体
-- `mcts_wrapper.py` - MCTS搜索算法的包装器
-- `replay_buffer.py` - 经验回放缓冲区
+- `dqn.py` - 包含BaseAgent基类以及所有智能体实现
 - `utils.py` - 游戏环境和辅助功能
+- `replay_buffer.py` - 经验回放缓冲区
+- `mcts_wrapper.py` - MCTS搜索算法的包装器和评估器
 - `train.py` - 训练循环
 - `main.py` - 主程序入口
 
+## 项目重构
+
+项目进行了全面重构，主要变化包括：
+
+1. 引入BaseAgent基类，实现接口统一
+2. 重构DQNAgent，使其继承自BaseAgent
+3. 实现MCTSDQNAgent，封装DQN与MCTS的结合
+4. 添加MiniMaxAgent作为新的基准智能体
+5. 修改训练和评估代码，支持多种智能体类型
+6. 简化接口，使用智能体的select_action方法替代复杂的MCTS参数
+
 ## 配置参数
 
-训练配置参数包括：
+各智能体类型支持的配置参数：
 
-- **DQN参数**：学习率、折扣因子、目标网络更新频率等
-- **MCTS参数**：模拟次数、UCT常数、最大节点数等
-- **训练参数**：回合数、批次大小、探索率等
+### DQN参数
+- 学习率、折扣因子、目标网络更新频率等
 
-## 训练过程
+### MCTS-DQN参数
+- 模拟次数、UCT常数、最大节点数
+- 评估方式：使用DQN或随机模拟
 
-训练过程会记录以下指标：
+### MiniMax参数
+- 搜索深度
+- 评估函数权重
 
-1. **损失曲线** - 网络训练损失
-2. **探索率** - Epsilon随时间的变化
-3. **胜率** - 对战历史版本的胜率
+## 性能对比
 
-模型会定期保存到`checkpoints`目录。
+不同智能体的优势与局限性：
 
-## 性能指标
-
-模型的性能可以通过以下方式评估：
-
-- 与随机策略对弈的胜率
-- 与旧版本的模型对弈的胜率
-- 在游戏树的搜索深度和准确性
+- **DQN**: 学习能力强，但需要大量训练数据；无法进行有效的前瞻搜索
+- **MCTS-DQN**: 综合了学习和搜索的优势，性能最佳；但计算开销大，推理速度较慢
+- **MiniMax**: 搜索深度有限，但不需要训练；对于中等复杂度的游戏效果良好
 
 ## 参考资料
 
 - OpenSpiel文档：[https://openspiel.readthedocs.io](https://openspiel.readthedocs.io)
 - DQN论文：[Human-level control through deep reinforcement learning](https://www.nature.com/articles/nature14236)
-- AlphaGo Zero：[Mastering the game of Go without human knowledge](https://www.nature.com/articles/nature24270) 
+- AlphaGo Zero：[Mastering the game of Go without human knowledge](https://www.nature.com/articles/nature24270)
+- MiniMax与Alpha-Beta剪枝：[Artificial Intelligence: A Modern Approach](http://aima.cs.berkeley.edu/) 

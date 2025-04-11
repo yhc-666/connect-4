@@ -1,12 +1,84 @@
 import numpy as np
 import pyspiel
 from open_spiel.python.algorithms import mcts
+import torch
+
+class DQNEvaluator(mcts.Evaluator):
+    """
+    使用DQN评估状态价值的评估器
+    用于MCTS搜索中评估叶子节点
+    """
+    
+    def __init__(self, dqn_agent):
+        """初始化DQN评估器
+        
+        Args:
+            dqn_agent: DQN智能体实例，用于评估状态
+        """
+        self.dqn_agent = dqn_agent
+        
+    def evaluate(self, state):
+        """使用DQN评估状态
+        
+        Args:
+            state: 游戏状态
+            
+        Returns:
+            所有玩家的估值
+        """
+        player = state.current_player()
+        # 获取状态表示
+        state_repr = MCTSWrapper.get_state_representation(state, player)
+        
+        # 使用DQN获取Q值
+        with torch.no_grad():
+            q_values = self.dqn_agent.get_q_values(np.expand_dims(state_repr, axis=0)).cpu().numpy()[0]
+        
+        # 取所有动作中的最大Q值作为价值估计
+        max_q_value = max(q_values) if len(q_values) > 0 else 0.0
+        
+        # 对于Connect4这样的零和游戏，一个玩家的收益是另一个玩家的损失
+        return [max_q_value, -max_q_value] if player == 0 else [-max_q_value, max_q_value]
+    
+    def prior(self, state):
+        """根据DQN估值为动作分配先验概率
+        
+        Args:
+            state: 游戏状态
+            
+        Returns:
+            动作及其先验概率
+        """
+        if state.is_chance_node():
+            return state.chance_outcomes()
+        
+        player = state.current_player()
+        legal_actions = state.legal_actions()
+        
+        if not legal_actions:
+            return []
+        
+        # 获取状态表示
+        state_repr = MCTSWrapper.get_state_representation(state, player)
+        
+        # 使用DQN获取Q值
+        with torch.no_grad():
+            q_values = self.dqn_agent.get_q_values(np.expand_dims(state_repr, axis=0)).cpu().numpy()[0]
+        
+        # 只考虑合法动作的Q值
+        legal_q_values = [q_values[action] for action in legal_actions]
+        
+        # 使用softmax将Q值转换为概率
+        exp_values = np.exp(legal_q_values - np.max(legal_q_values))  # 减去最大值避免溢出
+        probs = exp_values / np.sum(exp_values)
+        
+        return [(action, prob) for action, prob in zip(legal_actions, probs)]
 
 class MCTSWrapper:
     """OpenSpiel MCTS算法的包装器"""
     
     def __init__(self, game, num_simulations=100, uct_c=2.0, max_nodes=10000, dirichlet_alpha=0.3, 
-                 dirichlet_noise=False, solve=True, seed=None):
+                 dirichlet_noise=False, solve=True, use_dqn=False, dqn_agent=None):
         """初始化MCTS搜索
         
         Args:
@@ -18,6 +90,8 @@ class MCTSWrapper:
             dirichlet_noise: 是否添加Dirichlet噪声（用于根节点探索）
             solve: 是否在MCTS中解决终局状态
             seed: 随机数种子
+            use_dqn: 是否使用DQN评估叶子节点
+            dqn_agent: DQN智能体实例
         """
         self.game = game
         self.num_simulations = num_simulations
@@ -25,10 +99,15 @@ class MCTSWrapper:
         self.max_simulations = num_simulations
         self.max_nodes = max_nodes
         self.solve = solve
-        self.seed = seed if seed is not None else np.random.randint(0, 2**31)
+        self.use_dqn = use_dqn
         
-        # 创建MCTS评估器
-        self.evaluator = mcts.RandomRolloutEvaluator(n_rollouts=1)
+        # 创建评估器
+        if use_dqn and dqn_agent is not None:
+            # 使用DQN评估器
+            self.evaluator = DQNEvaluator(dqn_agent)
+        else:
+            # 使用随机模拟评估器
+            self.evaluator = mcts.RandomRolloutEvaluator(n_rollouts=1)
         
     def create_bot(self):
         """创建一个新的MCTS机器人实例"""

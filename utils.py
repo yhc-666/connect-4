@@ -1,10 +1,11 @@
+import os
 import numpy as np
-import pyspiel
-import torch
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
-import os
-from mcts_wrapper import MCTSWrapper
+import pyspiel
+from open_spiel.python.algorithms import mcts
+from mcts_wrapper import MCTSWrapper, DQNEvaluator
+from dqn import MiniMaxAgent
 
 def get_connect_four_game():
     """获取Connect4游戏实例"""
@@ -29,21 +30,18 @@ def get_state_representation(state, player_id):
     # Connect4的观察空间：[cell_states, rows, cols] = [3, 6, 7]
     return obs.reshape(3, 6, 7)
 
-def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0, 
-              verbose=False, collect_experience=False, replay_buffer=None, 
-              lambda_mix=0.5):
+def play_game(agent1, agent2, epsilon=0.0, verbose=False, collect_experience=False, 
+              replay_buffer=None, lambda_mix=0.5):
     """进行一局游戏，可选择收集经验到回放缓冲区
     
     Args:
         agent1: 玩家1的智能体
         agent2: 玩家2的智能体
-        mcts_wrapper: MCTS包装器
-        mcts_simulations: MCTS搜索的模拟次数
         epsilon: 探索概率
         verbose: 是否输出游戏过程
         collect_experience: 是否收集经验
         replay_buffer: 经验回放缓冲区
-        lambda_mix: MCTS和DQN目标的混合系数
+        lambda_mix: MCTS和DQN目标的混合系数（仅在collect_experience=True时使用）
         
     Returns:
         游戏奖励和终局状态
@@ -55,29 +53,8 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
         current_player = state.current_player()
         agent = agents[current_player]
         
-        # 获取状态表示
-        state_repr = get_state_representation(state, current_player)
-        
-        # 根据当前状态执行MCTS搜索
-        if mcts_simulations > 0:
-            mcts_wrapper.max_simulations = mcts_simulations
-            best_action, action_q_values, action_counts, _ = mcts_wrapper.search(state)
-            
-            # 用于探索的概率
-            if np.random.random() < epsilon:
-                # 随机选择一个动作
-                legal_actions = state.legal_actions()
-                action = np.random.choice(legal_actions)
-            else:
-                # 使用MCTS选择的最佳动作
-                action = best_action
-            
-            # 获取MCTS评估的Q值    
-            mcts_q_value = action_q_values.get(action, 0.0)
-        else:
-            # 如果不使用MCTS，直接使用DQN进行动作选择
-            action = agent.select_action(state_repr, epsilon)
-            mcts_q_value = 0.0  # 没有MCTS评估
+        # 选择动作
+        action = agent.select_action(state, epsilon)
         
         # 应用选择的动作
         next_state = state.clone()
@@ -92,9 +69,16 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
             reward = 0.0
             done = False
         
-        # 收集经验到回放缓冲区
-        if collect_experience and replay_buffer is not None:
+        # 收集经验到回放缓冲区（如果需要）
+        if collect_experience and replay_buffer is not None and hasattr(agent, 'get_q_values'):
+            state_repr = get_state_representation(state, current_player)
             next_state_repr = get_state_representation(next_state, current_player)
+            # 对于DQN智能体，需要计算Q值
+            mcts_q_value = 0.0  # 默认值
+            if hasattr(agent, 'mcts_wrapper') and agent.num_simulations > 0:
+                # 如果是MCTS-DQN智能体，尝试获取MCTS Q值
+                _, action_q_values, _, _ = agent.mcts_wrapper.search(state)
+                mcts_q_value = action_q_values.get(action, 0.0)
             replay_buffer.add(state_repr, action, reward, next_state_repr, mcts_q_value, done)
         
         # 更新游戏状态
@@ -111,29 +95,17 @@ def play_game(agent1, agent2, mcts_wrapper, mcts_simulations, epsilon=0.0,
     
     return returns, state
 
-def evaluate_agent(agent1, agent2, num_games=100, mcts_simulations=0):
+def evaluate_agent(agent1, agent2, num_games=100):
     """评估智能体的性能
     
     Args:
         agent1: 要评估的智能体
         agent2: 对手智能体
         num_games: 评估游戏数量
-        mcts_simulations: 评估时使用的MCTS模拟次数
         
     Returns:
         agent1的胜率
     """
-    game = get_connect_four_game()
-    mcts_wrapper = MCTSWrapper(
-        game=game,
-        num_simulations=mcts_simulations,
-        uct_c=2.0,
-        max_nodes=10000,
-        dirichlet_alpha=0.0,
-        dirichlet_noise=False,
-        solve=True
-    )
-    
     # 玩家1获胜、玩家2获胜和平局的次数
     wins_p1 = 0
     wins_p2 = 0
@@ -142,7 +114,7 @@ def evaluate_agent(agent1, agent2, num_games=100, mcts_simulations=0):
     for i in range(num_games):
         # 交替先手
         if i % 2 == 0:
-            returns, _ = play_game(agent1, agent2, mcts_wrapper, mcts_simulations)
+            returns, _ = play_game(agent1, agent2)
             if returns[0] > 0:
                 wins_p1 += 1
             elif returns[1] > 0:
@@ -150,7 +122,7 @@ def evaluate_agent(agent1, agent2, num_games=100, mcts_simulations=0):
             else:
                 draws += 1
         else:
-            returns, _ = play_game(agent2, agent1, mcts_wrapper, mcts_simulations)
+            returns, _ = play_game(agent2, agent1)
             if returns[0] > 0:
                 wins_p2 += 1
             elif returns[1] > 0:
@@ -207,5 +179,143 @@ def calculate_moving_average(values, window=100):
     Returns:
         移动平均值列表
     """
+    if not values or len(values) < window:
+        return []
     weights = np.repeat(1.0, window) / window
-    return np.convolve(values, weights, 'valid') 
+    return np.convolve(values, weights, 'valid')
+
+def play_interactive_game(agent):
+    """人机对战游戏
+    
+    Args:
+        agent: 智能体实例
+    """
+    state = get_initial_state()
+    
+    print("欢迎来到Connect4游戏！")
+    print("玩家1: 人类 (x)")
+    print("玩家2: AI (o)")
+    print("输入0-6选择落子的列")
+    
+    while not state.is_terminal():
+        print("\n当前棋盘:")
+        print(state.observation_string(0))
+        
+        current_player = state.current_player()
+        
+        if current_player == 0:  # 人类玩家
+            legal_actions = state.legal_actions()
+            while True:
+                try:
+                    action = int(input("请选择列 (0-6): "))
+                    if action in legal_actions:
+                        break
+                    else:
+                        print("无效的动作，该列已满或不存在！")
+                except ValueError:
+                    print("请输入0-6之间的数字！")
+        else:  # AI玩家
+            print("AI正在思考...")
+            
+            # 使用智能体选择动作
+            action = agent.select_action(state, epsilon=0)
+            
+            # 如果是MCTS智能体，可以打印搜索信息
+            if hasattr(agent, 'mcts_wrapper') and agent.num_simulations > 0:
+                _, action_q_values, action_counts, _ = agent.mcts_wrapper.search(state)
+                # 打印MCTS搜索信息
+                print("\nMCTS搜索结果:")
+                for a in sorted(action_counts.keys()):
+                    print(f"列 {a}: 访问次数 = {action_counts[a]}, Q值 = {action_q_values.get(a, 0):.4f}")
+        
+        # 应用动作
+        state.apply_action(action)
+        print(f"玩家 {current_player+1} 选择了列 {action}")
+    
+    # 游戏结束
+    print("\n最终棋盘:")
+    print(state.observation_string(0))
+    
+    returns = state.returns()
+    if returns[0] > 0:
+        print("恭喜！你赢了！")
+    elif returns[1] > 0:
+        print("AI获胜！再接再厉！")
+    else:
+        print("平局！")
+
+def update_elo_rating(player_rating, opponent_rating, score, k_factor=32):
+    """
+    更新玩家的ELO评分
+    
+    Args:
+        player_rating: 玩家当前 Elo 评分
+        opponent_rating: 对手当前 Elo 评分
+        score: 玩家本局得分 (1 for win, 0.5 for draw, 0 for loss)
+        k_factor: Elo K-factor (控制评分变化幅度)
+        
+    Returns:
+        更新后的玩家 Elo 评分
+    """
+    expected_score = 1 / (1 + 10**((opponent_rating - player_rating) / 400))
+    new_rating = player_rating + k_factor * (score - expected_score)
+    return new_rating
+
+def evaluate_agent_elo(agent, opponent_agent, current_elos, opponent_minimax_depth=7, k_factor=32):
+    """
+    使用 Elo 评分评估智能体性能，与固定深度的 Minimax 对战。
+
+    Args:
+        agent: 要评估的智能体。
+        opponent_agent: 对手智能体 (这里特指 Minimax).
+        current_elos: 包含当前 Elo 评分的字典:
+                      {'agent_p1_elo': elo, 'agent_p2_elo': elo,
+                       'minimax_p1_elo': elo, 'minimax_p2_elo': elo}
+        opponent_minimax_depth: Minimax 对手的搜索深度。
+        k_factor: Elo K-factor.
+
+    Returns:
+        包含更新后 Elo 评分的字典。
+    """
+    # 获取当前的 Elo 评分
+    agent_p1_elo = current_elos['agent_p1_elo']
+    agent_p2_elo = current_elos['agent_p2_elo']
+    minimax_p1_elo = current_elos['minimax_p1_elo']
+    minimax_p2_elo = current_elos['minimax_p2_elo']
+
+    # 确保对手是 MiniMaxAgent 且深度符合要求
+    # Note: We might not need to recreate the opponent if it's passed correctly.
+    # Let's assume opponent_agent is already the correct Minimax agent.
+    if not isinstance(opponent_agent, MiniMaxAgent):
+        print(f"Warning: Opponent for Elo evaluation is not MiniMaxAgent, but {type(opponent_agent)}")
+        # Or raise an error: raise TypeError("Opponent must be a MiniMaxAgent for Elo evaluation")
+
+    # --- Game 1: Agent (P1) vs Minimax (P2) ---
+    print("Elo Evaluation: Game 1 - Agent (P1) vs Minimax (P2)")
+    returns_g1, _ = play_game(agent, opponent_agent, verbose=False, collect_experience=False)
+    score_agent_g1 = 0.5 if returns_g1[0] == returns_g1[1] else (1.0 if returns_g1[0] > 0 else 0.0)
+    score_minimax_g1 = 1.0 - score_agent_g1
+
+    # 更新 Elo (Agent P1 vs Minimax P2)
+    new_agent_p1_elo = update_elo_rating(agent_p1_elo, minimax_p2_elo, score_agent_g1, k_factor)
+    new_minimax_p2_elo = update_elo_rating(minimax_p2_elo, agent_p1_elo, score_minimax_g1, k_factor)
+
+    # --- Game 2: Minimax (P1) vs Agent (P2) ---
+    print("Elo Evaluation: Game 2 - Minimax (P1) vs Agent (P2)")
+    returns_g2, _ = play_game(opponent_agent, agent, verbose=False, collect_experience=False)
+    # returns_g2[0] is Minimax's return as P1, returns_g2[1] is Agent's return as P2
+    score_minimax_g2 = 0.5 if returns_g2[0] == returns_g2[1] else (1.0 if returns_g2[0] > 0 else 0.0)
+    score_agent_g2 = 1.0 - score_minimax_g2
+
+    # 更新 Elo (Minimax P1 vs Agent P2)
+    new_minimax_p1_elo = update_elo_rating(minimax_p1_elo, agent_p2_elo, score_minimax_g2, k_factor)
+    new_agent_p2_elo = update_elo_rating(agent_p2_elo, minimax_p1_elo, score_agent_g2, k_factor)
+
+    updated_elos = {
+        'agent_p1_elo': new_agent_p1_elo,
+        'agent_p2_elo': new_agent_p2_elo,
+        'minimax_p1_elo': new_minimax_p1_elo,
+        'minimax_p2_elo': new_minimax_p2_elo
+    }
+
+    return updated_elos 
