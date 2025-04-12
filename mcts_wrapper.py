@@ -151,7 +151,11 @@ class MCTSWrapper:
         
         # 选择最佳动作（访问次数最多的动作）
         if root.children:
-            best_action = max(root.children, key=lambda c: c.explore_count).action
+            most_visited = max(c.explore_count for c in root.children)
+            best_action = max(
+                (c for c in root.children if c.explore_count == most_visited),
+                key=lambda c: c.total_reward,
+            ).action
         else:
             # 如果没有子节点，从合法动作中随机选择
             best_action = np.random.choice(state.legal_actions())
