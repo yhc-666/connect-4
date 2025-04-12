@@ -471,15 +471,13 @@ class MiniMaxAgent(BaseAgent):
         obs = np.array(state.observation_tensor(self.player_id))
         board_channels = obs.reshape(3, 6, 7)
 
-        # channel[0] = 当前玩家的落子，0/1
-        # channel[1] = 对手的落子，0/1
-        my_pieces = board_channels[0]
-        opp_pieces = board_channels[1]
+        my_pieces = board_channels[self.player_id]
+        opp_pieces = board_channels[self.opponent_id]
 
-        # 合并成单一的 6x7 棋盘
-        #   0 = empty
-        #   1 = 我(player_id)的落子
-        #   2 = 对手的落子
+        # Merge into a single 6x7 board
+        # 0 = empty
+        # 1 = my (player_id) move
+        # 2 = opponent's move
         board = np.zeros((6, 7), dtype=int)
         board[my_pieces == 1] = 1
         board[opp_pieces == 1] = 2
@@ -512,12 +510,62 @@ class MiniMaxAgent(BaseAgent):
                 window = [board[row-i, col+i] for i in range(4)]
                 score += self._evaluate_window(window)
 
-        # 中心列加分
+        # Prioritize center columns
         center_col = board[:, 3]
-        score += np.count_nonzero(center_col == 1) * 3
+        score += np.count_nonzero(center_col == 1) * 6
+        
+        # Prioritize double threats
+        score += self._evaluate_double_threats(board)
 
         return score
 
+
+    def _evaluate_double_threats(self, board):
+        """评估棋盘上的双重威胁."""
+        score = 0
+        # (Horizontal)
+        for row in range(6):
+            for col in range(5):
+                window = board[row, col:col+3]
+                score += self._evaluate_threat(window, self.player_id)
+
+        # (Vertical)
+        for row in range(4):
+            for col in range(7):
+                window = board[row:row+3, col]
+                score += self._evaluate_threat(window, self.player_id)
+
+        # (Positive diagonal)
+        for row in range(4):
+            for col in range(5):
+                window = [board[row+i, col+i] for i in range(3)]
+                score += self._evaluate_threat(window, self.player_id)
+
+        # (Negative diagonal)
+        for row in range(2, 6):
+            for col in range(5):
+                window = [board[row-i, col+i] for i in range(3)]
+                score += self._evaluate_threat(window, self.player_id)
+        return score
+
+    def _evaluate_threat(self, window, player):
+        player_count = np.count_nonzero(window == player)
+        empty_count = np.count_nonzero(window == 0)
+
+        if player_count == 2 and empty_count == 1:
+            return 50
+        return 0
+        
+    def save(self, path):
+        """保存智能体参数（MiniMax没有需要保存的模型）"""
+        # 保存配置参数
+        np.save(path, {'max_depth': self.max_depth})
+    
+    def load(self, path):
+        """加载智能体参数"""
+        # 加载配置参数
+        config = np.load(path, allow_pickle=True).item()
+        self.max_depth = config['max_depth']
 
     def _evaluate_window(self, window):
         """给定4格窗口的打分."""
@@ -546,15 +594,3 @@ class MiniMaxAgent(BaseAgent):
             return -20
 
         return 0
-
-        
-    def save(self, path):
-        """保存智能体参数（MiniMax没有需要保存的模型）"""
-        # 保存配置参数
-        np.save(path, {'max_depth': self.max_depth})
-    
-    def load(self, path):
-        """加载智能体参数"""
-        # 加载配置参数
-        config = np.load(path, allow_pickle=True).item()
-        self.max_depth = config['max_depth']
