@@ -113,6 +113,9 @@ python main.py evaluate --agent_type mcts_dqn --agent_type2 dqn --model_path che
 
 # 评估MiniMax vs DQN
 python main.py evaluate --agent_type minimax --agent_type2 dqn --model_path2 checkpoints/dqn_model.pth --minimax_depth 4 --num_games 50
+
+# 评估MCTS+DQN vs MiniMax
+python main.py evaluate --agent_type mcts_dqn --agent_type2 minimax --model_path 'checkpoints/DQN+MCTS(sim=150)/model_episode_5000.pth' --mcts_sims 50 --use_dqn_for_mcts --minimax_depth2 6 --num_games 10
 ```
 
 ## 文件结构

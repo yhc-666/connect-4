@@ -5,7 +5,7 @@ from matplotlib.colors import ListedColormap
 import pyspiel
 from open_spiel.python.algorithms import mcts
 from mcts_wrapper import MCTSWrapper, DQNEvaluator
-from dqn import MiniMaxAgent
+from agents import MiniMaxAgent
 from tqdm import tqdm
 
 
@@ -119,19 +119,12 @@ def evaluate_agent(agent1, agent2, num_games=100):
 
     Args:
         agent1: 要评估的智能体
-<<<<<<< HEAD
         agent2: 对手智能体（baseline）
         num_games: 每个位置（先手/后手）的评估游戏数量
         
-=======
-        agent2: 对手智能体
-        num_games: 评估游戏数量
-
->>>>>>> f0b49eb2b119784e349e9500939583d1aacdad0b
     Returns:
         agent1作为先手和后手的胜率、平局率和败率
     """
-<<<<<<< HEAD
     # 用于存储结果的字典
     results = {
         'first_player': {'wins': 0, 'draws': 0, 'losses': 0},
@@ -219,34 +212,6 @@ def evaluate_agent(agent1, agent2, num_games=100):
             'loss_rate': second_loss_rate
         }
     }
-=======
-    # 玩家1获胜、玩家2获胜和平局的次数
-    wins_p1 = 0
-    wins_p2 = 0
-    draws = 0
-
-    for i in range(num_games):
-        # 交替先手
-        if i % 2 == 0:
-            returns, _ = play_game(agent1, agent2)
-            if returns[0] > 0:
-                wins_p1 += 1
-            elif returns[1] > 0:
-                wins_p2 += 1
-            else:
-                draws += 1
-        else:
-            returns, _ = play_game(agent2, agent1)
-            if returns[0] > 0:
-                wins_p2 += 1
-            elif returns[1] > 0:
-                wins_p1 += 1
-            else:
-                draws += 1
-
-    win_rate = (wins_p1 + 0.5 * draws) / num_games
-    return win_rate
->>>>>>> f0b49eb2b119784e349e9500939583d1aacdad0b
 
 
 def visualize_board(state):

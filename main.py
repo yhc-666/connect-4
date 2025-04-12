@@ -108,7 +108,6 @@ def play_agent_vs_agent(model_path1, model_path2, mcts_simulations1=0, mcts_simu
     
     # 开始游戏
     state = get_initial_state()
-    print(agent1.max_depth)
     
     while not state.is_terminal():
         # 显示当前棋盘
