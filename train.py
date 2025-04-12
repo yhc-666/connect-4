@@ -7,7 +7,7 @@ from copy import deepcopy
 from tqdm import tqdm
 
 from replay_buffer import ReplayBuffer
-from dqn import DQNAgent, MCTSDQNAgent, MiniMaxAgent
+from agents import DQNAgent, MCTSDQNAgent, MiniMaxAgent
 from utils import (
     get_connect_four_game, 
     play_game, 
