@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import pyspiel
 
-from dqn import DQNAgent, MCTSDQNAgent, MiniMaxAgent, BaseAgent
+from agents import DQNAgent, MCTSDQNAgent, MiniMaxAgent, BaseAgent
 from utils import (
     get_connect_four_game, 
     get_initial_state, 

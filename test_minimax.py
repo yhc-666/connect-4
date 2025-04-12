@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from dqn import MiniMaxAgent
+from agents import MiniMaxAgent
 from utils import get_connect_four_game, get_initial_state, play_game, visualize_board, play_interactive_game
 
 def test_minimax_agent():
