@@ -10,7 +10,8 @@ from utils import (
     get_initial_state, 
     play_game, 
     visualize_board,
-    play_interactive_game
+    play_interactive_game,
+    evaluate_agent
 )
 from train import train
 
@@ -150,23 +151,204 @@ def play_agent_vs_agent(model_path1, model_path2, mcts_simulations1=0, mcts_simu
     else:
         print("平局!")
 
+def Evaluate_agent_vs_agent(model_path1, model_path2, mcts_simulations1=0, mcts_simulations2=0, 
+                         use_dqn_for_mcts1=True, use_dqn_for_mcts2=True, num_games=100,
+                         agent_type1="dqn", agent_type2="dqn", minimax_depth1=4, minimax_depth2=3):
+    """评估智能体的性能
+    
+    Args:
+        model_path1: 第一个DQN模型的路径（被评估的agent）
+        model_path2: 第二个DQN模型的路径（baseline agent）
+        mcts_simulations1: 第一个智能体的MCTS搜索模拟次数
+        mcts_simulations2: 第二个智能体的MCTS搜索模拟次数
+        use_dqn_for_mcts1: 第一个智能体是否使用DQN评估MCTS叶节点
+        use_dqn_for_mcts2: 第二个智能体是否使用DQN评估MCTS叶节点
+        num_games: 每个位置（先手/后手）的评估对局数量
+        agent_type1: 第一个智能体的类型
+        agent_type2: 第二个智能体的类型
+        minimax_depth1: 第一个MiniMax智能体的搜索深度
+        minimax_depth2: 第二个MiniMax智能体的搜索深度
+    
+    Returns:
+        agent1的评估结果
+    """
+    # 创建游戏
+    game = get_connect_four_game()
+    
+    # 创建智能体
+    input_shape = (3, 6, 7)  # [通道, 行, 列]
+    action_size = 7  # Connect4有7列可以下子
+    
+    # 初始化两个智能体
+    if agent_type1 == "mcts_dqn":
+        agent1 = MCTSDQNAgent(
+            input_shape=input_shape,
+            action_size=action_size,
+            num_simulations=mcts_simulations1,
+            use_dqn_evaluator=use_dqn_for_mcts1
+        )
+    elif agent_type1 == "minimax":
+        agent1 = MiniMaxAgent(input_shape, action_size, minimax_depth1)
+    else:
+        agent1 = DQNAgent(input_shape, action_size)
+    
+    if agent_type2 == "mcts_dqn":
+        agent2 = MCTSDQNAgent(
+            input_shape=input_shape,
+            action_size=action_size,
+            num_simulations=mcts_simulations2,
+            use_dqn_evaluator=use_dqn_for_mcts2
+        )
+    elif agent_type2 == "minimax":
+        agent2 = MiniMaxAgent(input_shape, action_size, minimax_depth2)
+    else:
+        agent2 = DQNAgent(input_shape, action_size)
+    
+    # 加载模型
+    if agent_type1 != "minimax":
+        agent1.load(model_path1)
+    if agent_type2 != "minimax":
+        agent2.load(model_path2)
+    
+    # 打印评估信息
+    print(f"开始评估 {agent_type1} agent vs {agent_type2} agent...")
+    print(f"每个位置进行 {num_games} 局对战")
+    
+    # 调用utils.py中的evaluate_agent函数进行评估
+    results = evaluate_agent(agent1, agent2, num_games)
+    
+    return results
+
 def main():
-    parser = argparse.ArgumentParser(description="DQN+MCTS Connect4")
-    parser.add_argument("--mode", choices=["train", "play", "agent_vs_agent"], default="train", help="运行模式: 训练或对弈")
-    parser.add_argument("--model_path", type=str, default=None, help="要加载的模型路径（对弈模式）")
-    parser.add_argument("--model_path2", type=str, default=None, help="第二个模型的路径（agent_vs_agent模式）")
-    parser.add_argument("--mcts_sims", type=int, default=0, help="MCTS搜索的模拟次数")
-    parser.add_argument("--mcts_sims2", type=int, default=0, help="第二个智能体的MCTS搜索模拟次数")
-    parser.add_argument("--use_dqn_for_mcts", action="store_true", help="使用DQN评估MCTS叶节点")
-    parser.add_argument("--use_dqn_for_mcts2", action="store_true", help="第二个智能体使用DQN评估MCTS叶节点")
-    parser.add_argument("--visualize", action="store_true", help="是否可视化棋盘（对弈模式）")
-    parser.add_argument("--episodes", type=int, default=5000, help="训练回合数")
-    parser.add_argument("--agent_type", choices=["dqn", "mcts_dqn", "minimax"], default="dqn", help="要训练的智能体类型")
-    parser.add_argument("--agent_type2", choices=["dqn", "mcts_dqn", "minimax"], default="dqn", help="第二个智能体类型")
-    parser.add_argument("--minimax_depth", type=int, default=4, help="MiniMax搜索深度（仅对minimax类型有效）")
-    parser.add_argument("--minimax_depth2", type=int, default=3, help="第二个MiniMax智能体的搜索深度")
+    parser = argparse.ArgumentParser(description="强化学习四子棋 (Connect4) - DQN与MCTS的结合")
+    subparsers = parser.add_subparsers(dest="mode", help="运行模式")
+    
+    # 训练模式参数
+    train_parser = subparsers.add_parser("train", help="训练智能体")
+    train_parser.add_argument("--agent_type", choices=["dqn", "mcts_dqn", "minimax"], 
+                             default="dqn", help="要训练的智能体类型")
+    train_parser.add_argument("--episodes", type=int, default=5000, 
+                             help="训练回合数")
+    train_parser.add_argument("--use_dqn_for_mcts", action="store_true", 
+                             help="使用DQN评估MCTS叶节点")
+    train_parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", 
+                             help="模型检查点保存目录")
+    train_parser.add_argument("--eval_freq", type=int, default=50, 
+                             help="评估频率（每多少回合评估一次）")
+    train_parser.add_argument("--checkpoint_freq", type=int, default=500, 
+                             help="保存检查点频率（每多少回合保存一次）")
+    train_parser.set_defaults(mode="train")
+    train_parser.description = """
+    训练模式使用说明:
+    此模式用于训练不同类型的Connect4智能体。
+    
+    示例:
+    - 训练基本DQN模型:
+      python main.py train --agent_type dqn --episodes 5000
+    
+    - 训练MCTS+DQN模型:
+      python main.py train --agent_type mcts_dqn --use_dqn_for_mcts --episodes 10000
+    """
+    
+    # 人机对弈模式参数
+    play_parser = subparsers.add_parser("play", help="人类玩家与AI对弈")
+    play_parser.add_argument("--model_path", type=str, required=True, 
+                            help="要加载的模型路径")
+    play_parser.add_argument("--mcts_sims", type=int, default=0, 
+                            help="MCTS搜索的模拟次数")
+    play_parser.add_argument("--use_dqn_for_mcts", action="store_true", 
+                            help="使用DQN评估MCTS叶节点")
+    play_parser.add_argument("--visualize", action="store_true", 
+                            help="是否可视化棋盘")
+    play_parser.set_defaults(mode="play")
+    play_parser.description = """
+    人机对弈模式使用说明:
+    此模式让人类玩家与训练好的AI模型对弈Connect4游戏。
+    
+    示例:
+    - 使用纯DQN模型进行对弈:
+      python main.py play --model_path checkpoints/dqn_model.pth --visualize
+    
+    - 使用MCTS增强的DQN模型进行对弈:
+      python main.py play --model_path checkpoints/dqn_model.pth --mcts_sims 50 --use_dqn_for_mcts --visualize
+    """
+    
+    # AI对战模式参数
+    versus_parser = subparsers.add_parser("agent_vs_agent", help="两个AI智能体相互对弈")
+    versus_parser.add_argument("--agent_type", choices=["dqn", "mcts_dqn", "minimax"], 
+                              default="dqn", help="第一个智能体类型")
+    versus_parser.add_argument("--agent_type2", choices=["dqn", "mcts_dqn", "minimax"], 
+                              default="dqn", help="第二个智能体类型")
+    versus_parser.add_argument("--model_path", type=str, help="第一个智能体的模型路径")
+    versus_parser.add_argument("--model_path2", type=str, help="第二个智能体的模型路径")
+    versus_parser.add_argument("--mcts_sims", type=int, default=0, 
+                              help="第一个智能体的MCTS搜索模拟次数")
+    versus_parser.add_argument("--mcts_sims2", type=int, default=0, 
+                              help="第二个智能体的MCTS搜索模拟次数")
+    versus_parser.add_argument("--use_dqn_for_mcts", action="store_true", 
+                              help="第一个智能体使用DQN评估MCTS叶节点")
+    versus_parser.add_argument("--use_dqn_for_mcts2", action="store_true", 
+                              help="第二个智能体使用DQN评估MCTS叶节点")
+    versus_parser.add_argument("--minimax_depth", type=int, default=4, 
+                              help="第一个MiniMax智能体的搜索深度")
+    versus_parser.add_argument("--minimax_depth2", type=int, default=3, 
+                              help="第二个MiniMax智能体的搜索深度")
+    versus_parser.add_argument("--visualize", action="store_true", 
+                              help="是否可视化棋盘")
+    versus_parser.set_defaults(mode="agent_vs_agent")
+    versus_parser.description = """
+    AI对战模式使用说明:
+    此模式让两个AI智能体相互对弈Connect4游戏。
+    
+    示例:
+    - DQN vs MiniMax对战:
+      python main.py agent_vs_agent --agent_type dqn --agent_type2 minimax --model_path checkpoints/dqn_model.pth --minimax_depth2 4 --visualize
+    
+    - DQN vs MCTS+DQN对战:
+      python main.py agent_vs_agent --agent_type dqn --agent_type2 mcts_dqn --model_path checkpoints/dqn_model.pth --model_path2 checkpoints/dqn_model.pth --mcts_sims2 50 --use_dqn_for_mcts2 --visualize
+    """
+    
+    # 评估模式参数
+    eval_parser = subparsers.add_parser("evaluate", help="评估智能体性能")
+    eval_parser.add_argument("--agent_type", choices=["dqn", "mcts_dqn", "minimax"], 
+                            default="dqn", help="第一个智能体类型")
+    eval_parser.add_argument("--agent_type2", choices=["dqn", "mcts_dqn", "minimax"], 
+                            default="dqn", help="第二个智能体类型（基准）")
+    eval_parser.add_argument("--model_path", type=str, help="第一个智能体的模型路径")
+    eval_parser.add_argument("--model_path2", type=str, help="第二个智能体的模型路径")
+    eval_parser.add_argument("--mcts_sims", type=int, default=0, 
+                            help="第一个智能体的MCTS搜索模拟次数")
+    eval_parser.add_argument("--mcts_sims2", type=int, default=0, 
+                            help="第二个智能体的MCTS搜索模拟次数")
+    eval_parser.add_argument("--use_dqn_for_mcts", action="store_true", 
+                            help="第一个智能体使用DQN评估MCTS叶节点")
+    eval_parser.add_argument("--use_dqn_for_mcts2", action="store_true", 
+                            help="第二个智能体使用DQN评估MCTS叶节点")
+    eval_parser.add_argument("--minimax_depth", type=int, default=4, 
+                            help="第一个MiniMax智能体的搜索深度")
+    eval_parser.add_argument("--minimax_depth2", type=int, default=3, 
+                            help="第二个MiniMax智能体的搜索深度")
+    eval_parser.add_argument("--num_games", type=int, default=100, 
+                            help="每个位置（先手/后手）的评估对局数量")
+    eval_parser.set_defaults(mode="evaluate")
+    eval_parser.description = """
+    评估模式使用说明:
+    此模式评估一个智能体相对于另一个智能体的性能，通过多局对弈计算胜率。
+    
+    示例:
+    - 评估MCTS+DQN vs DQN:
+      python main.py evaluate --agent_type mcts_dqn --agent_type2 dqn --model_path checkpoints/dqn_model.pth --model_path2 checkpoints/baseline_model.pth --mcts_sims 50 --use_dqn_for_mcts --num_games 100
+    
+    - 评估MiniMax vs DQN:
+      python main.py evaluate --agent_type minimax --agent_type2 dqn --model_path2 checkpoints/dqn_model.pth --minimax_depth 4 --num_games 50
+    """
     
     args = parser.parse_args()
+    
+    # 如果没有指定模式，显示帮助信息
+    if not hasattr(args, 'mode') or args.mode is None:
+        parser.print_help()
+        return
     
     if args.mode == "train":
         print(f"开始训练 {args.agent_type} 智能体...")
@@ -184,10 +366,10 @@ def main():
             "epsilon_decay": 0.0002,           # 探索率衰减系数
             "training_freq": 4,                # 每回合训练次数
             "lambda_mix": 0.5,                 # MCTS和DQN目标的混合系数
-            "eval_freq": 50,                  # 评估频率
+            "eval_freq": args.eval_freq,       # 评估频率
             "eval_episodes": 20,               # 评估回合数
-            "checkpoint_freq": 500,            # 检查点保存频率
-            "checkpoint_dir": "checkpoints",   # 检查点目录
+            "checkpoint_freq": args.checkpoint_freq,  # 检查点保存频率
+            "checkpoint_dir": args.checkpoint_dir,    # 检查点目录
             "device": "cuda" if torch.cuda.is_available() else "cpu",  # 计算设备
             
             # MCTS参数
@@ -231,6 +413,31 @@ def main():
             args.use_dqn_for_mcts, 
             args.use_dqn_for_mcts2,
             args.visualize,
+            args.agent_type,
+            args.agent_type2,
+            args.minimax_depth,
+            args.minimax_depth2
+        )
+    
+    elif args.mode == "evaluate":
+        # 如果使用minimax智能体，检查model_path是否需要
+        if args.agent_type != "minimax" and (args.model_path is None or not os.path.exists(args.model_path)):
+            print("错误: 请提供第一个有效的模型路径")
+            return
+        
+        if args.agent_type2 != "minimax" and (args.model_path2 is None or not os.path.exists(args.model_path2)):
+            print("错误: 请提供第二个有效的模型路径")
+            return
+        
+        print(f"开始评估{args.agent_type}智能体 vs {args.agent_type2}智能体...")
+        Evaluate_agent_vs_agent(
+            args.model_path, 
+            args.model_path2, 
+            args.mcts_sims, 
+            args.mcts_sims2,
+            args.use_dqn_for_mcts, 
+            args.use_dqn_for_mcts2,
+            args.num_games,
             args.agent_type,
             args.agent_type2,
             args.minimax_depth,

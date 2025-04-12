@@ -53,43 +53,66 @@ pip install -r requirements.txt
 
 ## 使用方法
 
-### 训练不同类型的智能体
+项目支持四种主要模式：训练(`train`)、人机对弈(`play`)、AI对战(`agent_vs_agent`)和评估(`evaluate`)。
+每种模式都有特定的参数集，可以通过`--help`参数查看详细说明。
+
+### 查看帮助信息
 
 ```bash
-# 训练DQN智能体
-python main.py --mode train --agent_type dqn
+# 查看主帮助信息
+python main.py --help
+
+# 查看特定模式的帮助信息
+python main.py train --help
+python main.py play --help
+python main.py agent_vs_agent --help
+python main.py evaluate --help
+```
+
+### 训练智能体
+
+```bash
+# 训练基本DQN智能体
+python main.py train --agent_type dqn --episodes 5000
 
 # 训练MCTS-DQN混合智能体
-python main.py --mode train --agent_type mcts_dqn --mcts_sims 50 --use_dqn_for_mcts
+python main.py train --agent_type mcts_dqn --use_dqn_for_mcts --episodes 10000
 
-# 创建MiniMax智能体（无需训练）
-python main.py --mode train --agent_type minimax
+# 自定义训练配置
+python main.py train --agent_type dqn --episodes 8000 --checkpoint_dir my_models --eval_freq 100 --checkpoint_freq 1000
 ```
 
-### 智能体对战
+### 人机对弈
 
 ```bash
-# DQN与DQN对战
-python main.py --mode agent_vs_agent --model_path checkpoints/final_dqn_model.pth --model_path2 checkpoints/final_dqn_model.pth --visualize
+# 与DQN智能体对弈
+python main.py play --model_path checkpoints/final_dqn_model.pth --visualize
 
-# DQN与MCTS-DQN对战
-python main.py --mode agent_vs_agent --model_path checkpoints/final_dqn_model.pth --model_path2 checkpoints/final_mcts_dqn_model.pth --mcts_sims2 100 --use_dqn_for_mcts2 --visualize
-
-# 任意两个智能体对战
-python main.py --mode agent_vs_agent --model_path <model1_path> --model_path2 <model2_path> --mcts_sims <sims1> --mcts_sims2 <sims2> --visualize
+# 与MCTS增强的DQN智能体对弈
+python main.py play --model_path checkpoints/final_dqn_model.pth --mcts_sims 50 --use_dqn_for_mcts --visualize
 ```
 
-### 与AI对弈
+### AI对战
 
 ```bash
-# 与DQN对弈
-python main.py --mode play --model_path checkpoints/final_dqn_model.pth --visualize
+# DQN vs MiniMax对战
+python main.py agent_vs_agent --agent_type dqn --agent_type2 minimax --model_path checkpoints/dqn_model.pth --minimax_depth2 4 --visualize
 
-# 与MCTS-DQN对弈
-python main.py --mode play --model_path checkpoints/final_mcts_dqn_model.pth --mcts_sims 100 --use_dqn_for_mcts --visualize
+# DQN vs MCTS+DQN对战
+python main.py agent_vs_agent --agent_type dqn --agent_type2 mcts_dqn --model_path checkpoints/dqn_model.pth --model_path2 checkpoints/dqn_model.pth --mcts_sims2 50 --use_dqn_for_mcts2 --visualize
 
-# 与MiniMax对弈
-python main.py --mode play --model_path checkpoints/minimax_model.pth --visualize
+# MiniMax vs MiniMax对战(不同搜索深度)
+python main.py agent_vs_agent --agent_type minimax --agent_type2 minimax --minimax_depth 5 --minimax_depth2 3 --visualize
+```
+
+### 评估智能体性能
+
+```bash
+# 评估MCTS+DQN vs DQN
+python main.py evaluate --agent_type mcts_dqn --agent_type2 dqn --model_path checkpoints/dqn_model.pth --model_path2 checkpoints/baseline_model.pth --mcts_sims 50 --use_dqn_for_mcts --num_games 100
+
+# 评估MiniMax vs DQN
+python main.py evaluate --agent_type minimax --agent_type2 dqn --model_path2 checkpoints/dqn_model.pth --minimax_depth 4 --num_games 50
 ```
 
 ## 文件结构
@@ -111,6 +134,7 @@ python main.py --mode play --model_path checkpoints/minimax_model.pth --visualiz
 4. 添加MiniMaxAgent作为新的基准智能体
 5. 修改训练和评估代码，支持多种智能体类型
 6. 简化接口，使用智能体的select_action方法替代复杂的MCTS参数
+7. 重构命令行界面，使用子命令模式整理参数，提高用户体验
 
 ## 配置参数
 

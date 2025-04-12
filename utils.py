@@ -6,6 +6,7 @@ import pyspiel
 from open_spiel.python.algorithms import mcts
 from mcts_wrapper import MCTSWrapper, DQNEvaluator
 from dqn import MiniMaxAgent
+from tqdm import tqdm
 
 def get_connect_four_game():
     """获取Connect4游戏实例"""
@@ -100,38 +101,99 @@ def evaluate_agent(agent1, agent2, num_games=100):
     
     Args:
         agent1: 要评估的智能体
-        agent2: 对手智能体
-        num_games: 评估游戏数量
+        agent2: 对手智能体（baseline）
+        num_games: 每个位置（先手/后手）的评估游戏数量
         
     Returns:
-        agent1的胜率
+        agent1作为先手和后手的胜率、平局率和败率
     """
-    # 玩家1获胜、玩家2获胜和平局的次数
-    wins_p1 = 0
-    wins_p2 = 0
-    draws = 0
+    # 用于存储结果的字典
+    results = {
+        'first_player': {'wins': 0, 'draws': 0, 'losses': 0},
+        'second_player': {'wins': 0, 'draws': 0, 'losses': 0}
+    }
     
-    for i in range(num_games):
-        # 交替先手
-        if i % 2 == 0:
-            returns, _ = play_game(agent1, agent2)
-            if returns[0] > 0:
-                wins_p1 += 1
-            elif returns[1] > 0:
-                wins_p2 += 1
-            else:
-                draws += 1
-        else:
-            returns, _ = play_game(agent2, agent1)
-            if returns[0] > 0:
-                wins_p2 += 1
-            elif returns[1] > 0:
-                wins_p1 += 1
-            else:
-                draws += 1
+    # Agent1作为先手(玩家0)进行num_games次游戏
+    print(f"评估Agent1作为先手的{num_games}局游戏...")
+    for _ in tqdm(range(num_games), desc="Agent1作为先手"):
+        state = get_initial_state()
+        
+        # 第一步随机行动
+        legal_actions = state.legal_actions()
+        random_action = np.random.choice(legal_actions)
+        state.apply_action(random_action)
+        
+        # 继续游戏直到结束
+        while not state.is_terminal():
+            current_player = state.current_player()
+            current_agent = agent2 if current_player == 1 else agent1
+            action = current_agent.select_action(state, epsilon=0)
+            state.apply_action(action)
+        
+        # 记录结果
+        returns = state.returns()
+        if returns[0] > 0:  # agent1获胜
+            results['first_player']['wins'] += 1
+        elif returns[1] > 0:  # agent2获胜
+            results['first_player']['losses'] += 1
+        else:  # 平局
+            results['first_player']['draws'] += 1
     
-    win_rate = (wins_p1 + 0.5 * draws) / num_games
-    return win_rate
+    # Agent1作为后手(玩家1)进行num_games次游戏
+    print(f"评估Agent1作为后手的{num_games}局游戏...")
+    for _ in tqdm(range(num_games), desc="Agent1作为后手"):
+        state = get_initial_state()
+        
+        # 第一步随机行动
+        legal_actions = state.legal_actions()
+        random_action = np.random.choice(legal_actions)
+        state.apply_action(random_action)
+        
+        # 继续游戏直到结束
+        while not state.is_terminal():
+            current_player = state.current_player()
+            current_agent = agent1 if current_player == 1 else agent2
+            action = current_agent.select_action(state, epsilon=0)
+            state.apply_action(action)
+        
+        # 记录结果
+        returns = state.returns()
+        if returns[1] > 0:  # agent1获胜
+            results['second_player']['wins'] += 1
+        elif returns[0] > 0:  # agent2获胜
+            results['second_player']['losses'] += 1
+        else:  # 平局
+            results['second_player']['draws'] += 1
+    
+    # 计算胜率、平局率和败率
+    total_first = num_games
+    total_second = num_games
+    
+    first_win_rate = results['first_player']['wins'] / total_first
+    first_draw_rate = results['first_player']['draws'] / total_first
+    first_loss_rate = results['first_player']['losses'] / total_first
+    
+    second_win_rate = results['second_player']['wins'] / total_second
+    second_draw_rate = results['second_player']['draws'] / total_second
+    second_loss_rate = results['second_player']['losses'] / total_second
+    
+    # 打印结果
+    print("\n评估结果:")
+    print(f"Agent1作为先手: 胜率={first_win_rate:.2f}, 平局率={first_draw_rate:.2f}, 败率={first_loss_rate:.2f}")
+    print(f"Agent1作为后手: 胜率={second_win_rate:.2f}, 平局率={second_draw_rate:.2f}, 败率={second_loss_rate:.2f}")
+    
+    return {
+        'first_player': {
+            'win_rate': first_win_rate,
+            'draw_rate': first_draw_rate,
+            'loss_rate': first_loss_rate
+        },
+        'second_player': {
+            'win_rate': second_win_rate,
+            'draw_rate': second_draw_rate,
+            'loss_rate': second_loss_rate
+        }
+    }
 
 def visualize_board(state):
     """可视化Connect4棋盘
