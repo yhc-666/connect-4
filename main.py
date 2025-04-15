@@ -184,8 +184,9 @@ def Evaluate_agent_vs_agent(model_path1, model_path2, mcts_simulations1=0, mcts_
             input_shape=input_shape,
             action_size=action_size,
             num_simulations=mcts_simulations1,
-            use_dqn_evaluator=use_dqn_for_mcts1
+            use_dqn_evaluator=use_dqn_for_mcts1,
         )
+        agent1.mcts_wrapper.dirichlet_noise = None
     elif agent_type1 == "minimax":
         agent1 = MiniMaxAgent(input_shape, action_size, minimax_depth1)
     else:
@@ -232,10 +233,12 @@ def main():
                              help="使用DQN评估MCTS叶节点")
     train_parser.add_argument("--checkpoint_dir", type=str, default="checkpoints", 
                              help="模型检查点保存目录")
-    train_parser.add_argument("--eval_freq", type=int, default=50, 
+    train_parser.add_argument("--eval_freq", type=int, default=1000, 
                              help="评估频率（每多少回合评估一次）")
-    train_parser.add_argument("--checkpoint_freq", type=int, default=500, 
+    train_parser.add_argument("--checkpoint_freq", type=int, default=1000, 
                              help="保存检查点频率（每多少回合保存一次）")
+    train_parser.add_argument("--mcts_sim", type=int, default=50)
+    train_parser.add_argument("--lambda_mix", type=float, default=0.5)
     train_parser.set_defaults(mode="train")
     train_parser.description = """
     训练模式使用说明:
@@ -251,6 +254,8 @@ def main():
     
     # 人机对弈模式参数
     play_parser = subparsers.add_parser("play", help="人类玩家与AI对弈")
+    play_parser.add_argument("--minimax", action="store_true") 
+    play_parser.add_argument("--minimax_depth", type=int, required=True) 
     play_parser.add_argument("--model_path", type=str, required=True, 
                             help="要加载的模型路径")
     play_parser.add_argument("--mcts_sims", type=int, default=0, 
@@ -356,36 +361,42 @@ def main():
         config = {
             "num_episodes": args.episodes,     # 训练回合数
             "batch_size": 64,                  # 训练批次大小
-            "replay_buffer_size": 20000,       # 回放缓冲区容量
-            "dqn_learning_rate": 0.0001,       # DQN学习率
+            "replay_buffer_size": 50000,       # 回放缓冲区容量
+            "dqn_learning_rate": 0.0005,       # DQN学习率
             "gamma": 0.99,                     # 奖励折扣因子
             "target_update_freq": 100,         # 目标网络更新频率
             "epsilon_start": 1.0,              # 初始探索率
             "epsilon_end": 0.05,               # 最终探索率
             "epsilon_decay": 0.0002,           # 探索率衰减系数
             "training_freq": 4,                # 每回合训练次数
-            "lambda_mix": 0.5,                 # MCTS和DQN目标的混合系数
+            "lambda_mix": args.lambda_mix,                 # MCTS和DQN目标的混合系数
             "eval_freq": args.eval_freq,       # 评估频率
-            "eval_episodes": 20,               # 评估回合数
+            "eval_episodes": 10,               # 评估回合数
             "checkpoint_freq": args.checkpoint_freq,  # 检查点保存频率
             "checkpoint_dir": args.checkpoint_dir,    # 检查点目录
-            "device": "cuda" if torch.cuda.is_available() else "cpu",  # 计算设备
+            "device": torch.device("cpu"), # if torch.cuda.is_available() else "cpu",  # 计算设备
+            "eval_minimax_depth": 6, #7,
             
             # MCTS参数
-            "mcts_simulations": 50,            # 每步MCTS模拟次数
+            "mcts_simulations": args.mcts_sim,            # 每步MCTS模拟次数
             "uct_c": 2.0,                      # UCT探索常数
             "max_nodes": 10000,                # MCTS搜索树最大节点数
-            "dirichlet_alpha": 0.3,            # Dirichlet噪声参数
-            "dirichlet_noise": True,           # 是否添加Dirichlet噪声
+            # "dirichlet_alpha": 0.3,            # Dirichlet噪声参数
+            # "dirichlet_noise": True,           # 是否添加Dirichlet噪声
             "solve": True,                     # 是否在MCTS中解决终局状态
             "use_dqn_for_mcts": args.use_dqn_for_mcts,
-            "agent_type": args.agent_type      # 智能体类型
+            "agent_type": args.agent_type,      # 智能体类型
+            "seed": 1
         }
-        
+        print(config)
         # 开始训练
         agent = train(config)
         
     elif args.mode == "play":
+        if args.minimax:
+            agent = MiniMaxAgent((3,6,7),7, max_depth=args.minimax_depth)
+            play_interactive_game(agent)
+            return
         if args.model_path is None or not os.path.exists(args.model_path):
             print("错误: 请提供有效的模型路径")
             return

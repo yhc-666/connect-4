@@ -7,6 +7,11 @@ from open_spiel.python.algorithms import mcts
 from mcts_wrapper import MCTSWrapper, DQNEvaluator
 from agents import MiniMaxAgent
 from tqdm import tqdm
+from collections import deque
+from dataclasses import dataclass
+from typing import Optional
+import random
+import torch
 
 
 def get_connect_four_game():
@@ -32,7 +37,8 @@ def get_state_representation(state, player_id):
     """
     obs = np.array(state.observation_tensor(player_id))
     # Connect4的观察空间：[cell_states, rows, cols] = [3, 6, 7]
-    return obs.reshape(3, 6, 7)
+    obs = obs.reshape(3, 6, 7)
+    return obs
 
 
 def play_game(
@@ -60,22 +66,38 @@ def play_game(
     """
     state = get_initial_state()
     agents = [agent1, agent2]
+    # (start state to make move, intermediate state for opponent)
+    states_deque = deque(maxlen=2)  # s_1, s_1', s_2
+    # add first two states
+    states_deque.append(state)
+    starting_move = agents[state.current_player()].select_action(state, epsilon)
+    last_action = starting_move
+    intermediate_state = state.clone()
+    intermediate_state.apply_action(starting_move)
+    states_deque.append(intermediate_state)
+    length = 1
 
-    while not state.is_terminal():
-        current_player = state.current_player()
-        agent = agents[current_player]
+    while not states_deque[1].is_terminal():
+        # get state after opponent's move
+        intermediate_state = states_deque[1]
+        next_player = intermediate_state.current_player()
+        agent = agents[next_player]
 
         # 选择动作
-        action = agent.select_action(state, epsilon)
+        opponent_action = agent.select_action(intermediate_state, epsilon)
+        next_action = opponent_action
+        length += 1
 
         # 应用选择的动作
-        next_state = state.clone()
-        next_state.apply_action(action)
+        next_state = intermediate_state.clone()
+        next_state.apply_action(opponent_action)
 
         # 计算奖励
+        initial_state = states_deque[0]
+        initial_player = initial_state.current_player()
         if next_state.is_terminal():
             returns = next_state.returns()
-            reward = returns[current_player]
+            reward = returns[initial_player] # lose
             done = True
         else:
             reward = 0.0
@@ -87,31 +109,71 @@ def play_game(
             and replay_buffer is not None
             and hasattr(agent, "get_q_values")
         ):
-            state_repr = get_state_representation(state, current_player)
-            next_state_repr = get_state_representation(next_state, current_player)
+            initial_state_repr = get_state_representation(initial_state, initial_player)
+            next_state_repr = get_state_representation(next_state, initial_player)
             # 对于DQN智能体，需要计算Q值
             mcts_q_value = 0.0  # 默认值
             if hasattr(agent, "mcts_wrapper") and agent.num_simulations > 0:
                 # 如果是MCTS-DQN智能体，尝试获取MCTS Q值
-                _, action_q_values, _, _ = agent.mcts_wrapper.search(state)
-                mcts_q_value = action_q_values.get(action, 0.0)
+                _, action_q_values, _, _ = agent.mcts_wrapper.search(initial_state)
+                mcts_q_value = action_q_values.get(last_action, 0.0)
             replay_buffer.add(
-                state_repr, action, reward, next_state_repr, mcts_q_value, done
+                initial_state_repr,
+                last_action,
+                reward,
+                next_state_repr,
+                mcts_q_value,
+                done,
             )
 
         # 更新游戏状态
-        state = next_state
+        states_deque.append(next_state)
+        # state = next_state
+        last_action = next_action
 
         if verbose:
-            print(f"玩家 {current_player} 执行动作 {action}")
+            print(f"玩家 {initial_player} 执行动作 {last_action}")
             print(state)
 
+    # Add winning sample by opponent
+    if collect_experience and replay_buffer is not None:
+        winning_player = 1 - initial_player
+        winning_state_repr = get_state_representation(states_deque[0], winning_player)
+        winning_reward = states_deque[1].returns()[winning_player]
+        # dummy_next_state_repr = np.zeros_like(losing_state_repr)
+        dummy_next_state_repr = (
+            winning_state_repr  # we'll ignore the outputs for no_grad forward
+        )
+        empty_mcts_q_value = 0.0
+        done = True
+
+        replay_buffer.add(
+            winning_state_repr,
+            last_action,
+            winning_reward,
+            dummy_next_state_repr,
+            empty_mcts_q_value,
+            done,
+        )
+
+    if verbose:
+        print("win")
+        print(winning_state_repr)
+        print(mcts_q_value)
+        print(action_q_values.items())
+        print(last_action)
+        print(winning_reward)
+        print(replay_buffer.buffer[-2])
+        print(replay_buffer.buffer[-1])
+        visualize_board(states_deque[0])
+        print("============================================")
+
     # 游戏结束，返回奖励
-    returns = state.returns()
+    returns = states_deque[1].returns()
     if verbose:
         print(f"游戏结束! 奖励: 玩家0 = {returns[0]}, 玩家1 = {returns[1]}")
 
-    return returns, state
+    return returns, state, length
 
 
 def evaluate_agent(agent1, agent2, num_games=100):
@@ -121,96 +183,114 @@ def evaluate_agent(agent1, agent2, num_games=100):
         agent1: 要评估的智能体
         agent2: 对手智能体（baseline）
         num_games: 每个位置（先手/后手）的评估游戏数量
-        
+
     Returns:
         agent1作为先手和后手的胜率、平局率和败率
     """
     # 用于存储结果的字典
     results = {
-        'first_player': {'wins': 0, 'draws': 0, 'losses': 0},
-        'second_player': {'wins': 0, 'draws': 0, 'losses': 0}
+        "first_player": {"wins": 0, "draws": 0, "losses": 0},
+        "second_player": {"wins": 0, "draws": 0, "losses": 0},
     }
-    
+    set_seed(1)
+
     # Agent1作为先手(玩家0)进行num_games次游戏
     print(f"评估Agent1作为先手的{num_games}局游戏...")
     for _ in tqdm(range(num_games), desc="Agent1作为先手"):
         state = get_initial_state()
-        
+
         # 第一步随机行动
         legal_actions = state.legal_actions()
         random_action = np.random.choice(legal_actions)
         state.apply_action(random_action)
-        
+
         # 继续游戏直到结束
         while not state.is_terminal():
+            # print("\n当前棋盘:")
+            # print(state.observation_string(0))
             current_player = state.current_player()
             current_agent = agent2 if current_player == 1 else agent1
             action = current_agent.select_action(state, epsilon=0)
             state.apply_action(action)
-        
+
         # 记录结果
         returns = state.returns()
         if returns[0] > 0:  # agent1获胜
-            results['first_player']['wins'] += 1
+            results["first_player"]["wins"] += 1
+            print("P1 WON")
         elif returns[1] > 0:  # agent2获胜
-            results['first_player']['losses'] += 1
+            results["first_player"]["losses"] += 1
+            print("P1 LOST")
         else:  # 平局
-            results['first_player']['draws'] += 1
-    
+            results["first_player"]["draws"] += 1
     # Agent1作为后手(玩家1)进行num_games次游戏
     print(f"评估Agent1作为后手的{num_games}局游戏...")
     for _ in tqdm(range(num_games), desc="Agent1作为后手"):
         state = get_initial_state()
-        
+
         # 第一步随机行动
-        legal_actions = state.legal_actions()
-        random_action = np.random.choice(legal_actions)
-        state.apply_action(random_action)
-        
+        # legal_actions = state.legal_actions()
+        # random_action = np.random.choice(legal_actions)
+
+        options = np.arange(7)
+        mu = 3.0
+        sigma = 1.0
+        unnormalized = np.exp(-0.5 * ((options - mu) / sigma) ** 2)
+        distribution = unnormalized / np.sum(unnormalized)
+        sampled_action = np.random.choice(options, p=distribution)
+
+        state.apply_action(sampled_action)
+
         # 继续游戏直到结束
         while not state.is_terminal():
+            # print("\n当前棋盘:")
+            # print(state.observation_string(0))
             current_player = state.current_player()
             current_agent = agent1 if current_player == 1 else agent2
             action = current_agent.select_action(state, epsilon=0)
             state.apply_action(action)
-        
+
         # 记录结果
         returns = state.returns()
         if returns[1] > 0:  # agent1获胜
-            results['second_player']['wins'] += 1
+            results["second_player"]["wins"] += 1
         elif returns[0] > 0:  # agent2获胜
-            results['second_player']['losses'] += 1
+            results["second_player"]["losses"] += 1
         else:  # 平局
-            results['second_player']['draws'] += 1
-    
+            results["second_player"]["draws"] += 1
+
     # 计算胜率、平局率和败率
     total_first = num_games
     total_second = num_games
-    
-    first_win_rate = results['first_player']['wins'] / total_first
-    first_draw_rate = results['first_player']['draws'] / total_first
-    first_loss_rate = results['first_player']['losses'] / total_first
-    
-    second_win_rate = results['second_player']['wins'] / total_second
-    second_draw_rate = results['second_player']['draws'] / total_second
-    second_loss_rate = results['second_player']['losses'] / total_second
-    
+
+    first_win_rate = results["first_player"]["wins"] / total_first
+    first_draw_rate = results["first_player"]["draws"] / total_first
+    first_loss_rate = results["first_player"]["losses"] / total_first
+
+    second_win_rate = results["second_player"]["wins"] / total_second
+    second_draw_rate = results["second_player"]["draws"] / total_second
+    second_loss_rate = results["second_player"]["losses"] / total_second
+
     # 打印结果
     print("\n评估结果:")
-    print(f"Agent1作为先手: 胜率={first_win_rate:.2f}, 平局率={first_draw_rate:.2f}, 败率={first_loss_rate:.2f}")
-    print(f"Agent1作为后手: 胜率={second_win_rate:.2f}, 平局率={second_draw_rate:.2f}, 败率={second_loss_rate:.2f}")
-    
+    print(
+        f"Agent1作为先手: 胜率={first_win_rate:.2f}, 平局率={first_draw_rate:.2f}, 败率={first_loss_rate:.2f}"
+    )
+    print(
+        f"Agent1作为后手: 胜率={second_win_rate:.2f}, 平局率={second_draw_rate:.2f}, 败率={second_loss_rate:.2f}"
+    )
+
     return {
-        'first_player': {
-            'win_rate': first_win_rate,
-            'draw_rate': first_draw_rate,
-            'loss_rate': first_loss_rate
+        "first_player": {
+            "win_rate": first_win_rate,
+            "draw_rate": first_draw_rate,
+            "loss_rate": first_loss_rate,
         },
-        'second_player': {
-            'win_rate': second_win_rate,
-            'draw_rate': second_draw_rate,
-            'loss_rate': second_loss_rate
-        }
+        "second_player": {
+            "win_rate": second_win_rate,
+            "draw_rate": second_draw_rate,
+            "loss_rate": second_loss_rate,
+        },
     }
 
 
@@ -277,8 +357,8 @@ def play_interactive_game(agent):
     state = get_initial_state()
 
     print("欢迎来到Connect4游戏！")
-    print("玩家1: 人类 (x)")
-    print("玩家2: AI (o)")
+    print("玩家1: AI (o)")
+    print("玩家2: 人类 (x)")
     print("输入0-6选择落子的列")
 
     while not state.is_terminal():
@@ -287,7 +367,7 @@ def play_interactive_game(agent):
 
         current_player = state.current_player()
 
-        if current_player == 0:  # 人类玩家
+        if current_player == 1:  # 人类玩家
             legal_actions = state.legal_actions()
             while True:
                 try:
@@ -384,7 +464,7 @@ def evaluate_agent_elo(
 
     # --- Game 1: Agent (P1) vs Minimax (P2) ---
     print("Elo Evaluation: Game 1 - Agent (P1) vs Minimax (P2)")
-    returns_g1, _ = play_game(
+    returns_g1, _, _ = play_game(
         agent, opponent_agent, verbose=False, collect_experience=False
     )
     score_agent_g1 = (
@@ -402,7 +482,7 @@ def evaluate_agent_elo(
 
     # --- Game 2: Minimax (P1) vs Agent (P2) ---
     print("Elo Evaluation: Game 2 - Minimax (P1) vs Agent (P2)")
-    returns_g2, _ = play_game(
+    returns_g2, _, _ = play_game(
         opponent_agent, agent, verbose=False, collect_experience=False
     )
     # returns_g2[0] is Minimax's return as P1, returns_g2[1] is Agent's return as P2
@@ -440,7 +520,6 @@ def plot_q_values_heatmap(q_values, column_labels=None):
     # Convert Q-values to a NumPy array and reshape into a 1xN matrix.
     q_values = np.array(q_values)
     data = q_values.reshape(1, -1)
-
     # Set up column labels if not provided.
     if column_labels is None:
         column_labels = [str(i) for i in range(data.shape[1])]
@@ -462,6 +541,38 @@ def plot_q_values_heatmap(q_values, column_labels=None):
     plt.show()
 
 
+def plot_visit_counts_heatmap(visits, column_labels=None):
+    """
+    Plots a heat map of Q-values across columns.
+
+    Parameters:
+      q_values (array-like): A 1D array of Q-values (one per column).
+      column_labels (list, optional): Labels for each column. If None, numeric labels are used.
+    """
+    # Convert Q-values to a NumPy array and reshape into a 1xN matrix.
+    visits = np.array(visits)
+    data = visits.reshape(1, -1)
+    # Set up column labels if not provided.
+    if column_labels is None:
+        column_labels = [str(i) for i in range(data.shape[1])]
+
+    plt.figure(figsize=(8, 2))  # adjust figure size as needed
+    # Display the data as an image, 'hot' colormap highlights high values.
+    heatmap = plt.imshow(data, cmap="hot", aspect="auto")
+
+    # Add a color bar
+    plt.colorbar(heatmap, label="Count")
+
+    # Remove the y-axis ticks since there is only one row.
+    plt.yticks([])
+    # Set x-axis ticks to be at each column center.
+    plt.xticks(ticks=np.arange(data.shape[1]), labels=column_labels)
+
+    plt.xlabel("Column")
+    plt.title("Heat Map of Visit Counts Across Columns")
+    plt.show()
+
+
 def progress_to_state(game, move_history):
     """
     Given a game and a move history (list of actions), return the state reached
@@ -474,3 +585,17 @@ def progress_to_state(game, move_history):
         else:
             raise ValueError(f"Move {move} is not legal in the current state.")
     return state
+
+
+def set_seed(seed: int):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    # For PyTorch on all GPUs (if available)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # if using multi-GPU.
+
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(seed)

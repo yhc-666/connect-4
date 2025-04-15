@@ -32,11 +32,12 @@ class DQNEvaluator(mcts.Evaluator):
         
         # 使用DQN获取Q值
         with torch.no_grad():
-            q_values = self.dqn_agent.get_q_values(np.expand_dims(state_repr, axis=0)).cpu().numpy()[0]
+            q_values = self.dqn_agent.get_q_values(np.expand_dims(state_repr, axis=0)).cpu().numpy()
+            q_values = q_values[0]
         
         # 取所有动作中的最大Q值作为价值估计
         max_q_value = max(q_values) if len(q_values) > 0 else 0.0
-        
+        # print(max_q_value) 
         # 对于Connect4这样的零和游戏，一个玩家的收益是另一个玩家的损失
         return [max_q_value, -max_q_value] if player == 0 else [-max_q_value, max_q_value]
     
@@ -78,7 +79,7 @@ class MCTSWrapper:
     """OpenSpiel MCTS算法的包装器"""
     
     def __init__(self, game, num_simulations=100, uct_c=2.0, max_nodes=10000, dirichlet_alpha=0.3, 
-                 dirichlet_noise=False, solve=True, use_dqn=False, dqn_agent=None):
+                 dirichlet_eps=0.25, solve=True, use_dqn=False, dqn_agent=None, test=False):
         """初始化MCTS搜索
         
         Args:
@@ -100,6 +101,9 @@ class MCTSWrapper:
         self.max_nodes = max_nodes
         self.solve = solve
         self.use_dqn = use_dqn
+        self.dirichlet_noise = None
+        if not test:
+            self.dirichlet_noise = (dirichlet_eps, dirichlet_alpha)
         
         # 创建评估器
         if use_dqn and dqn_agent is not None:
@@ -118,6 +122,7 @@ class MCTSWrapper:
             evaluator=self.evaluator,
             solve=self.solve,
             verbose=False,
+            dirichlet_noise=self.dirichlet_noise
         )
     
     def search(self, state):
@@ -133,7 +138,7 @@ class MCTSWrapper:
         
         # 执行搜索并获取搜索树
         root = bot.mcts_search(state)
-        
+
         # 获取所有动作的Q值和访问计数
         action_q_values = {}
         action_counts = {}
@@ -151,14 +156,15 @@ class MCTSWrapper:
         
         # 选择最佳动作（访问次数最多的动作）
         if root.children:
-            most_visited = max(c.explore_count for c in root.children)
-            best_action = max(
-                (c for c in root.children if c.explore_count == most_visited),
-                key=lambda c: c.total_reward,
-            ).action
+            best_action = root.best_child().action
+            # most_visited = max(c.explore_count for c in root.children)
+            # best_action = max(
+            #     (c for c in root.children if c.explore_count == most_visited),
+            #     key=lambda c: c.total_reward,
+            # ).action
         else:
             # 如果没有子节点，从合法动作中随机选择
-            best_action = np.random.choice(state.legal_actions())
+            best_action = np.random.choice(state.legal_actions()).item()
             action_q_values[best_action] = 0.0
             action_counts[best_action] = 0
             action_priors[best_action] = 1.0
@@ -178,4 +184,7 @@ class MCTSWrapper:
         """
         # 对于Connect4，我们返回观察张量并重新排列维度
         obs = np.array(state.observation_tensor(player_id))
-        return obs.reshape(3, 6, 7)  # Connect4的观察空间形状：[棋子类型, 行, 列] 
+        obs = obs.reshape(3, 6, 7)
+        # obs = -obs[0] + obs[1]
+        # obs = obs.reshape(1,6,7)
+        return obs
