@@ -217,10 +217,8 @@ def evaluate_agent(agent1, agent2, num_games=100):
         returns = state.returns()
         if returns[0] > 0:  # agent1获胜
             results["first_player"]["wins"] += 1
-            print("P1 WON")
         elif returns[1] > 0:  # agent2获胜
             results["first_player"]["losses"] += 1
-            print("P1 LOST")
         else:  # 平局
             results["first_player"]["draws"] += 1
     # Agent1作为后手(玩家1)进行num_games次游戏

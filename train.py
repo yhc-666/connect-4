@@ -46,7 +46,8 @@ def train(config):
     checkpoint_dir = config["checkpoint_dir"]
     device = config["device"]
     seed = config["seed"]
-    
+    resume_path = config["resume_path"]
+     
     # Agent type and related parameters
     agent_type = config.get("agent_type", "dqn")
     mcts_simulations = config.get("mcts_simulations")
@@ -99,6 +100,10 @@ def train(config):
     else:
         raise ValueError(f"Unsupported agent type: {agent_type}")
     
+    # resuming training:
+    if resume_path:
+        agent.load(resume_path)
+        
     # If MiniMax agent, no training needed
     if agent_type == "minimax":
         # Save and return the agent
@@ -204,6 +209,8 @@ def train(config):
         # Save checkpoints
         if episode % checkpoint_freq == 0 or episode == num_episodes:
             t = datetime.datetime.now().strftime('%d-%H_%m')
+            if resume_path:
+                t = 'resume_' + t
             checkpoint_path = os.path.join(checkpoint_dir, f"{t}_model_episode_{episode}.pth")
             if hasattr(agent, 'save'):
                 agent.save(checkpoint_path)

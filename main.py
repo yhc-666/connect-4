@@ -239,6 +239,7 @@ def main():
                              help="保存检查点频率（每多少回合保存一次）")
     train_parser.add_argument("--mcts_sim", type=int, default=50)
     train_parser.add_argument("--lambda_mix", type=float, default=0.5)
+    train_parser.add_argument("--resume_path", type=str, default=None)
     train_parser.set_defaults(mode="train")
     train_parser.description = """
     训练模式使用说明:
@@ -365,9 +366,9 @@ def main():
             "dqn_learning_rate": 0.0005,       # DQN学习率
             "gamma": 0.99,                     # 奖励折扣因子
             "target_update_freq": 100,         # 目标网络更新频率
-            "epsilon_start": 1.0,              # 初始探索率
+            "epsilon_start": 0.1,              # 初始探索率
             "epsilon_end": 0.05,               # 最终探索率
-            "epsilon_decay": 0.0002,           # 探索率衰减系数
+            "epsilon_decay": (0.1-0.05)/5000,           # 探索率衰减系数
             "training_freq": 4,                # 每回合训练次数
             "lambda_mix": args.lambda_mix,                 # MCTS和DQN目标的混合系数
             "eval_freq": args.eval_freq,       # 评估频率
@@ -376,6 +377,7 @@ def main():
             "checkpoint_dir": args.checkpoint_dir,    # 检查点目录
             "device": torch.device("cpu"), # if torch.cuda.is_available() else "cpu",  # 计算设备
             "eval_minimax_depth": 6, #7,
+            "resume_path": args.resume_path,
             
             # MCTS参数
             "mcts_simulations": args.mcts_sim,            # 每步MCTS模拟次数
