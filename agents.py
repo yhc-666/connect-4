@@ -18,7 +18,7 @@ class BaseAgent:
         """
         self.input_shape = input_shape
         self.action_size = action_size
-        self.device = torch.device(device)
+        self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device("cpu")
 
     def select_action(self, state, epsilon=0.0):
         """选择动作
@@ -93,6 +93,7 @@ class DQNAgent(BaseAgent):
         learning_rate=0.001,
         gamma=0.99,
         tau=0.001,
+        n_step=1,
     ):
         """初始化DQN智能体
 
@@ -107,6 +108,7 @@ class DQNAgent(BaseAgent):
         super(DQNAgent, self).__init__(input_shape, action_size, device)
         self.gamma = gamma  # 折扣因子
         self.tau = tau  # 目标网络软更新系数
+        self.n_step = n_step
 
         # 创建主网络和目标网络
         self.policy_net = DQN(input_shape, action_size).to(self.device)
@@ -115,7 +117,7 @@ class DQNAgent(BaseAgent):
         self.target_net.eval()  # 目标网络不训练
 
         # 优化器
-        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate)
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=learning_rate) # TODO:
 
     def select_action(self, state, epsilon=0.0):
         """选择动作（根据ε-贪婪策略）
@@ -199,24 +201,30 @@ class DQNAgent(BaseAgent):
         next_states_tensor = torch.FloatTensor(next_states).to(self.device)
         dones_tensor = torch.FloatTensor(dones).to(self.device)
         q_mcts_tensor = torch.FloatTensor(q_mcts_values).to(self.device)
-
-        # 计算当前状态的Q值
-        q_values = self.policy_net(states_tensor)
-        q_values = q_values.gather(1, actions_tensor.unsqueeze(1)).squeeze(1)
-        # 计算下一状态的最大Q值
+        
+        # Double DQN, use next action from policy net and use its Q value in target net
         with torch.no_grad():
-            next_q_values = self.target_net(next_states_tensor).max(1)[0]
-            # 对终止状态，下一状态的Q值为0
-            next_q_values = next_q_values * (1 - dones_tensor)
+            next_actions = self.policy_net(next_states_tensor).argmax(dim=1, keepdim=True)
 
-            # 计算DQN目标
-            dqn_targets = rewards_tensor + self.gamma * next_q_values
+            next_q_values = self.target_net(next_states_tensor).gather(1, next_actions).squeeze()
+            next_q_values[dones] = 0.0
+            dqn_targets = rewards_tensor + (self.gamma ** self.n_step) * next_q_values
+            # next_q_values = self.target_net(next_states_tensor).max(1)[0]
+            # # 对终止状态，下一状态的Q值为0
+            # next_q_values = next_q_values * (1 - dones_tensor)
+
+            # # 计算DQN目标
+            # dqn_targets = rewards_tensor + self.gamma * next_q_values
 
             # 混合DQN目标和MCTS估值
             targets = (1 - lambda_mix) * dqn_targets + lambda_mix * q_mcts_tensor
 
+        # 计算当前状态的Q值
+        q_values = self.policy_net(states_tensor)
+        q_values = q_values.gather(1, actions_tensor.unsqueeze(1)).squeeze(1)
+
         # 计算损失并更新网络
-        loss = F.mse_loss(q_values, targets)
+        loss = F.smooth_l1_loss(q_values, targets)
 
         self.optimizer.zero_grad()
         loss.backward()
@@ -283,6 +291,7 @@ class MCTSDQNAgent(BaseAgent):
         solve=True,
         use_dqn_evaluator=True,
         n_rollouts=1,
+        n_step=1
     ):
         """初始化MCTS-DQN智能体
 
@@ -314,6 +323,7 @@ class MCTSDQNAgent(BaseAgent):
         self.solve = solve
         self.use_dqn_evaluator = use_dqn_evaluator
         self.n_rollouts = n_rollouts
+        self.n_step = n_step
 
         # 当使用mcts_wrapper时，需要初始化游戏
         from open_spiel.python.algorithms import mcts

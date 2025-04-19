@@ -256,7 +256,7 @@ def main():
     # 人机对弈模式参数
     play_parser = subparsers.add_parser("play", help="人类玩家与AI对弈")
     play_parser.add_argument("--minimax", action="store_true") 
-    play_parser.add_argument("--minimax_depth", type=int, required=True) 
+    play_parser.add_argument("--minimax_depth", type=int, default=0) 
     play_parser.add_argument("--model_path", type=str, required=True, 
                             help="要加载的模型路径")
     play_parser.add_argument("--mcts_sims", type=int, default=0, 
@@ -375,7 +375,7 @@ def main():
             "eval_episodes": 10,               # 评估回合数
             "checkpoint_freq": args.checkpoint_freq,  # 检查点保存频率
             "checkpoint_dir": args.checkpoint_dir,    # 检查点目录
-            "device": torch.device("cpu"), # if torch.cuda.is_available() else "cpu",  # 计算设备
+            "device": torch.device("cuda") if torch.cuda.is_available() else "cpu",  # 计算设备
             "eval_minimax_depth": 6, #7,
             "resume_path": args.resume_path,
             

@@ -49,6 +49,7 @@ def play_game(
     collect_experience=False,
     replay_buffer=None,
     lambda_mix=0.5,
+    n_step=1
 ):
     """进行一局游戏，可选择收集经验到回放缓冲区
 

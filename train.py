@@ -47,6 +47,7 @@ def train(config):
     device = config["device"]
     seed = config["seed"]
     resume_path = config["resume_path"]
+    n_step = config.get("n_step", 1)
      
     # Agent type and related parameters
     agent_type = config.get("agent_type", "dqn")
@@ -72,7 +73,8 @@ def train(config):
             action_size=action_size,
             device=device,
             learning_rate=dqn_learning_rate,
-            gamma=gamma
+            gamma=gamma,
+            n_step=n_step
         )
     elif agent_type == "mcts_dqn":
         # Create MCTS-DQN hybrid agent
@@ -87,7 +89,8 @@ def train(config):
             max_nodes=config.get("max_nodes", 10000),
             solve=config.get("solve", True),
             use_dqn_evaluator=use_dqn_for_mcts,
-            n_rollouts=1
+            n_rollouts=1,
+            n_step=n_step
         )
     elif agent_type == "minimax":
         # Create MiniMax agent
@@ -157,7 +160,8 @@ def train(config):
             verbose=False,
             collect_experience=True,
             replay_buffer=replay_buffer,
-            lambda_mix=lambda_mix
+            lambda_mix=lambda_mix,
+            n_step=n_step
         )
         
         # rewards0.append(returns[0])  # Record player 1's reward
