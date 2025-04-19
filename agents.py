@@ -202,16 +202,17 @@ class DQNAgent(BaseAgent):
         dones_tensor = torch.FloatTensor(dones).to(self.device)
         q_mcts_tensor = torch.FloatTensor(q_mcts_values).to(self.device)
         
-        # Double DQN, use next action from policy net and use its Q value in target net
         with torch.no_grad():
-            next_actions = self.policy_net(next_states_tensor).argmax(dim=1, keepdim=True)
+            # Double DQN, use next action from policy net and use its Q value in target net
+            # next_actions = self.policy_net(next_states_tensor).argmax(dim=1, keepdim=True)
+            # next_q_values = self.target_net(next_states_tensor).gather(1, next_actions).squeeze()
+            # next_q_values[dones] = 0.0
 
-            next_q_values = self.target_net(next_states_tensor).gather(1, next_actions).squeeze()
-            next_q_values[dones] = 0.0
-            dqn_targets = rewards_tensor + (self.gamma ** self.n_step) * next_q_values
-            # next_q_values = self.target_net(next_states_tensor).max(1)[0]
             # # 对终止状态，下一状态的Q值为0
-            # next_q_values = next_q_values * (1 - dones_tensor)
+            next_q_values = self.target_net(next_states_tensor).max(1)[0]
+            next_q_values = next_q_values * (1 - dones_tensor)
+
+            dqn_targets = rewards_tensor + (self.gamma ** self.n_step) * next_q_values
 
             # # 计算DQN目标
             # dqn_targets = rewards_tensor + self.gamma * next_q_values
@@ -313,7 +314,7 @@ class MCTSDQNAgent(BaseAgent):
 
         # 创建内部DQNAgent
         self.dqn_agent = DQNAgent(
-            input_shape, action_size, device, learning_rate, gamma, tau
+            input_shape, action_size, device, learning_rate, gamma, tau, n_step=n_step
         )
 
         # MCTS参数

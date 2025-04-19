@@ -240,6 +240,7 @@ def main():
     train_parser.add_argument("--mcts_sim", type=int, default=50)
     train_parser.add_argument("--lambda_mix", type=float, default=0.5)
     train_parser.add_argument("--resume_path", type=str, default=None)
+    train_parser.add_argument("--n_step", type=int, default=1)
     train_parser.set_defaults(mode="train")
     train_parser.description = """
     训练模式使用说明:

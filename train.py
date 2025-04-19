@@ -161,7 +161,8 @@ def train(config):
             collect_experience=True,
             replay_buffer=replay_buffer,
             lambda_mix=lambda_mix,
-            n_step=n_step
+            n_step=n_step,
+            gamma=gamma
         )
         
         # rewards0.append(returns[0])  # Record player 1's reward

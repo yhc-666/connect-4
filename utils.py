@@ -49,7 +49,8 @@ def play_game(
     collect_experience=False,
     replay_buffer=None,
     lambda_mix=0.5,
-    n_step=1
+    n_step=1,
+    gamma=0.99
 ):
     """进行一局游戏，可选择收集经验到回放缓冲区
 
@@ -67,38 +68,26 @@ def play_game(
     """
     state = get_initial_state()
     agents = [agent1, agent2]
-    # (start state to make move, intermediate state for opponent)
-    states_deque = deque(maxlen=2)  # s_1, s_1', s_2
-    # add first two states
-    states_deque.append(state)
-    starting_move = agents[state.current_player()].select_action(state, epsilon)
-    last_action = starting_move
-    intermediate_state = state.clone()
-    intermediate_state.apply_action(starting_move)
-    states_deque.append(intermediate_state)
+    player_experiences = {0: [], 1: []}
+    done = False
     length = 1
 
-    while not states_deque[1].is_terminal():
-        # get state after opponent's move
-        intermediate_state = states_deque[1]
-        next_player = intermediate_state.current_player()
-        agent = agents[next_player]
+    while not done:
+        current_player = state.current_player()
+        agent = agents[current_player]
 
         # 选择动作
-        opponent_action = agent.select_action(intermediate_state, epsilon)
-        next_action = opponent_action
+        action = agent.select_action(state, epsilon)
         length += 1
 
         # 应用选择的动作
-        next_state = intermediate_state.clone()
-        next_state.apply_action(opponent_action)
+        next_state = state.clone()
+        next_state.apply_action(action)
 
         # 计算奖励
-        initial_state = states_deque[0]
-        initial_player = initial_state.current_player()
         if next_state.is_terminal():
             returns = next_state.returns()
-            reward = returns[initial_player] # lose
+            reward = returns[current_player] # win
             done = True
         else:
             reward = 0.0
@@ -110,73 +99,69 @@ def play_game(
             and replay_buffer is not None
             and hasattr(agent, "get_q_values")
         ):
-            initial_state_repr = get_state_representation(initial_state, initial_player)
-            next_state_repr = get_state_representation(next_state, initial_player)
+            initial_state_repr = get_state_representation(state, current_player)
             # 对于DQN智能体，需要计算Q值
             mcts_q_value = 0.0  # 默认值
             if hasattr(agent, "mcts_wrapper") and agent.num_simulations > 0:
                 # 如果是MCTS-DQN智能体，尝试获取MCTS Q值
-                _, action_q_values, _, _ = agent.mcts_wrapper.search(initial_state)
-                mcts_q_value = action_q_values.get(last_action, 0.0)
-            replay_buffer.add(
+                _, action_q_values, _, _ = agent.mcts_wrapper.search(state)
+                mcts_q_value = action_q_values.get(action, 0.0)
+            player_experiences[current_player].append([
                 initial_state_repr,
-                last_action,
+                action,
                 reward,
-                next_state_repr,
                 mcts_q_value,
-                done,
+                done]
             )
 
         # 更新游戏状态
-        states_deque.append(next_state)
-        # state = next_state
-        last_action = next_action
+        state = next_state
 
         if verbose:
-            print(f"玩家 {initial_player} 执行动作 {last_action}")
+            print(f"玩家 {current_player} 执行动作 {action}")
             print(state)
 
-    # Add winning sample by opponent
+    # Add losing sample for opponent
     if collect_experience and replay_buffer is not None:
-        winning_player = 1 - initial_player
-        winning_state_repr = get_state_representation(states_deque[0], winning_player)
-        winning_reward = states_deque[1].returns()[winning_player]
-        # dummy_next_state_repr = np.zeros_like(losing_state_repr)
-        dummy_next_state_repr = (
-            winning_state_repr  # we'll ignore the outputs for no_grad forward
-        )
-        empty_mcts_q_value = 0.0
-        done = True
+        losing_player = 1 - current_player
+        losing_reward = state.returns()[losing_player]
+        player_experiences[losing_player][-1][2] = losing_reward
+        player_experiences[losing_player][-1][4] = True
+        
 
-        replay_buffer.add(
-            winning_state_repr,
-            last_action,
-            winning_reward,
-            dummy_next_state_repr,
-            empty_mcts_q_value,
-            done,
-        )
+    # add actual n_step samples
+    for states in list(player_experiences.values()):
+        for i in range(len(states)):
+            last_idx = min(i+n_step-1, len(states)-1)
+            s_0, a_0, _, mcts_q_0, _ = states[i]
+            s_n, _, r_n, _, done_n = states[last_idx]
 
+            # Compute discounted sum of rewards
+            G = 0
+            if r_n != 0: # only terminal state has reward
+                discount_pow = last_idx - i
+                G += (gamma ** discount_pow) * r_n
+                
+            replay_buffer.add(s_0, a_0, G, s_n, mcts_q_0, done_n)
+        
     if verbose:
         print("win")
-        print(winning_state_repr)
-        print(mcts_q_value)
+        print()
+        print(action)
         print(action_q_values.items())
-        print(last_action)
-        print(winning_reward)
+        print(losing_reward)
         print(replay_buffer.buffer[-2])
         print(replay_buffer.buffer[-1])
-        visualize_board(states_deque[0])
+        # import code; code.interact(local=locals())
         print("============================================")
 
     # 游戏结束，返回奖励
-    returns = states_deque[1].returns()
+    returns = state.returns()
     if verbose:
         print(f"游戏结束! 奖励: 玩家0 = {returns[0]}, 玩家1 = {returns[1]}")
 
     return returns, state, length
-
-
+    
 def evaluate_agent(agent1, agent2, num_games=100):
     """评估智能体的性能
 
